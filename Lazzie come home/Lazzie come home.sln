@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34330.188
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Lazzie come home", "Lazzie come home.csproj", "{B3ECA01E-0ABE-4742-AAC7-F26E12A36E8D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B3ECA01E-0ABE-4742-AAC7-F26E12A36E8D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B3ECA01E-0ABE-4742-AAC7-F26E12A36E8D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B3ECA01E-0ABE-4742-AAC7-F26E12A36E8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B3ECA01E-0ABE-4742-AAC7-F26E12A36E8D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {CAEF7CF0-14DE-4806-B304-AB11756F9B3A}
+	EndGlobalSection
+EndGlobal

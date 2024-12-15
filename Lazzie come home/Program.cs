@@ -5,33 +5,18 @@ using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 
+/**
+ * Help Lazzie come home safely.
+ **/
 class Player
 {
     static int visionRange;
     static int homeDistanceHorizontal;
     static int homeDistanceVertical;
-    static (int x, int y) lazPosition = (0, 0); // Lazzie's relative position on the map
-    static (int x, int y) homePosition; // Relative position of home
-    static Dictionary<(int x, int y), char> map = new Dictionary<(int, int), char>(); // Known map
-    static PriorityQueue<(int x, int y), double> openList = new PriorityQueue<(int x, int y), double>();
-    static HashSet<(int x, int y)> openSet = new HashSet<(int x, int y)>();
-    static Dictionary<(int x, int y), double> gValues = new Dictionary<(int x, int y), double>();
-    static Dictionary<(int x, int y), double> rhsValues = new Dictionary<(int x, int y), double>();
-
-    static void PrintStates()
-    {
-        Console.Error.WriteLine($"Laz position: {lazPosition}");
-        Console.Error.WriteLine($"Home position: {homePosition}");
-        // Console.Error.WriteLine("Map:");
-        // Console.Error.WriteLine(string.Join(Environment.NewLine, map));
-        Console.Error.WriteLine("GValues:");
-        Console.Error.WriteLine(string.Join(Environment.NewLine, gValues));
-        Console.Error.WriteLine("rhsValues:");
-        Console.Error.WriteLine(string.Join(Environment.NewLine, rhsValues));
-        Console.Error.WriteLine("openSet:");
-        Console.Error.WriteLine(string.Join(";", openSet.ToArray()));
-    }
-
+    static (int x, int y) lazPosition = (0, 0);
+    static (int x, int y) homePosition;
+    static Dictionary<(int x, int y), char> map = new Dictionary<(int, int), char>();
+    static List<(int x, int y)> currentPath = new List<(int x, int y)>();
     static void Main(string[] args)
     {
         string[] inputs = Console.ReadLine().Split(' ');
@@ -39,188 +24,117 @@ class Player
         homeDistanceHorizontal = int.Parse(inputs[1]); // Distance in W/E direction towards home (negative means W side, positive means E side)
         homeDistanceVertical = int.Parse(inputs[2]); // Distance in N/S direction towards home (negative means N side, positive means S side)
         homePosition = (homeDistanceHorizontal, homeDistanceVertical);
-        
-        InitializeDStarLite();
-        PrintStates();
+        currentPath = AStarPath(lazPosition, homePosition);
         // game loop
         while (true)
         {
             UpdateVision();
-            PrintStates();
-            // To debug: Console.Error.WriteLine("Debug messages...");
 
-            //string path = PlanPath();
+            if (currentPath.Count == 0 || ObstacleOnPath())
+            {
+                Console.Error.WriteLine($"Obstacle found!");
+                currentPath = AStarPath(lazPosition, homePosition);
+            }
 
-            // Output next direction
-            Console.WriteLine(PlanPath());
+            // Follow the path if available
+            string nextMove = "";
+            if (currentPath.Count > 0)
+            {
+                (int x, int y) nextPosition = currentPath[0];
+                nextMove = DirectionTo(lazPosition, nextPosition);
+                lazPosition = nextPosition;
+                currentPath.RemoveAt(0); // Move along the path
+            }
+
+            Console.WriteLine(nextMove);
 
         }
     }
 
-    static void InitializeDStarLite()
+    static bool ObstacleOnPath()
     {
-        gValues[lazPosition] = 0;
-        rhsValues[homePosition] = 0;
-        openList.Enqueue(homePosition, Heuristic(lazPosition, homePosition));
-        openSet.Add(homePosition);
+        foreach (var pos in currentPath)
+        {
+            if (map.ContainsKey(pos) && map[pos] == '#')
+                return true;
+        }
+        return false;
     }
 
     static void UpdateVision()
     {
         int halfVision = visionRange / 2;
+
         for (int i = -halfVision; i <= halfVision; i++)
         {
             string row = Console.ReadLine();
-            //Console.Error.WriteLine(row);
+            Console.Error.WriteLine(row);
             for (int j = -halfVision; j <= halfVision; j++)
             {
                 (int x, int y) position = (lazPosition.x + j, lazPosition.y + i);
                 char cell = row[j + halfVision];
                 if (cell != '?') map[position] = cell;
-
-                if (cell == '#')
-                    UpdateCell(position);
             }
         }
         Console.Error.WriteLine();
     }
 
-    static void UpdateCell((int x, int y) position)
+    static string PathToDirections(List<(int x, int y)> path, int amount=10)
     {
-        // Mark cell as obstacle, update D* Lite state, and replan if necessary
-        if (!map.ContainsKey(position))
+        var directions = new StringBuilder();
+        for (int i = 1; i < amount; i++)
         {
-            map[position] = '#';
-            rhsValues[position] = double.PositiveInfinity;
-            UpdateVertex(position);
+            directions.Append(DirectionTo(path[i - 1], path[i]));
         }
+        return directions.ToString();
     }
 
-    static void UpdateVertex((int x, int y) u)
+    static List<(int x, int y)> AStarPath((int x, int y) start, (int x, int y) goal)
     {
-        if (u != homePosition)
+        var openSet = new PriorityQueue<(int x, int y), double>();
+        var cameFrom = new Dictionary<(int x, int y), (int x, int y)>();
+        var gScore = new Dictionary<(int x, int y), double> { [start] = 0 };
+        openSet.Enqueue(start, Heuristic(start, goal));
+
+        while (openSet.Count > 0)
         {
-            rhsValues[u] = MinSuccessor(u);
-        }
+            var current = openSet.Dequeue();
+            if (current == goal)
+                return ReconstructPath(cameFrom, current);
 
-        // Remove from openSet instead of openList directly
-        if (openSet.Contains(u))
-            openSet.Remove(u);
-
-        // Only enqueue if there's a mismatch in g and rhs values
-        if (gValues.GetValueOrDefault(u, double.PositiveInfinity) != rhsValues.GetValueOrDefault(u, double.PositiveInfinity))
-        {
-            openList.Enqueue(u, CalculateKey(u));
-            openSet.Add(u); // Mark it in openSet
-        }
-    }
-
-    static double MinSuccessor((int x, int y) u)
-    {
-        // Calculate minimum rhs from neighbors
-        double minRHS = double.PositiveInfinity;
-        foreach (var v in GetNeighbors(u))  
-        {
-            if (map.GetValueOrDefault(v, '.') != '#')
-            {
-                double cost = 1 + gValues.GetValueOrDefault(v, double.PositiveInfinity);
-                minRHS = Math.Min(minRHS, cost);
-            }
-        }
-        return minRHS;
-    }
-
-    static double Heuristic((int x, int y) a, (int x, int y) b) =>
-        Math.Abs(a.x - b.x) + Math.Abs(a.y - b.y);
-
-    static double CalculateKey((int x, int y) u) =>
-        Math.Min(gValues.GetValueOrDefault(u, double.PositiveInfinity), rhsValues.GetValueOrDefault(u, double.PositiveInfinity)) +
-        Heuristic(lazPosition, u);
-
-    static string PlanPath()
-    {
-        (int x, int y) current = default;
-        while (openList.TryDequeue(out current, out _) && !openSet.Contains(current))
-        {
-            // Skip elements that are no longer in openSet (they were "removed" lazily)
-            continue;
-        }
-
-        // If openList is empty or no valid path found
-        if (!openSet.Contains(current))
-            return ""; // No valid path found
-
-        // Process the current node
-        openSet.Remove(current); // Officially remove from openSet
-
-        if (gValues.GetValueOrDefault(current, double.PositiveInfinity) > rhsValues.GetValueOrDefault(current, double.PositiveInfinity))
-        {
-            // Overconsistent: update gValue to match rhsValue
-            gValues[current] = rhsValues[current];
             foreach (var neighbor in GetNeighbors(current))
             {
-                UpdateVertex(neighbor);
+                if (map.GetValueOrDefault(neighbor, '.') == '#') continue; // Ignore obstacles
+
+                double tentativeGScore = gScore[current] + 1;
+                if (tentativeGScore < gScore.GetValueOrDefault(neighbor, double.PositiveInfinity))
+                {
+                    cameFrom[neighbor] = current;
+                    gScore[neighbor] = tentativeGScore;
+                    double fScore = tentativeGScore + Heuristic(neighbor, goal);
+                    openSet.Enqueue(neighbor, fScore);
+                }
             }
         }
-        else
-        {
-            // Underconsistent: reset gValue and update neighbors
-            gValues[current] = double.PositiveInfinity;
-            UpdateVertex(current);
-            foreach (var neighbor in GetNeighbors(current))
-            {
-                UpdateVertex(neighbor);
-            }
-        }
-
-        // After planning, return the path towards the home position
-        return ExtractPathToHome();
+        return new List<(int x, int y)>(); // Return empty if no path found
     }
 
-    static IEnumerable<(int x, int y)> GetNeighbors((int x, int y) position)
+    static List<(int x, int y)> ReconstructPath(Dictionary<(int x, int y), (int x, int y)> cameFrom, (int x, int y) current)
     {
-        yield return (position.x + 1, position.y);
-        yield return (position.x - 1, position.y);
-        yield return (position.x, position.y + 1);
-        yield return (position.x, position.y - 1);
+        var path = new List<(int x, int y)>();
+        while (cameFrom.ContainsKey(current))
+        {
+            path.Add(current);
+            current = cameFrom[current];
+        }
+        path.Reverse();
+        return path;
     }
 
-    static string ExtractPathToHome()
+    static void PrintStates()
     {
-        var path = new List<string>();
-        var position = lazPosition;
-        PrintStates();
-        for(int i = 0; i < 10; i++)
-        {
-            // Choose the neighbor with the minimum gValue
-            var nextPosition = MinNeighbor(position);
-            if (nextPosition == position)
-                break; // No path forward, likely due to an obstacle or incomplete path
-            Console.Error.WriteLine(nextPosition);
-            if (path.Count == 0)
-                lazPosition = nextPosition;
-            path.Add(DirectionTo(position, nextPosition));
-            position = nextPosition;
-        }
-
-        return string.Join("", path); // Combine directions as a string
-    }
-
-    static (int x, int y) MinNeighbor((int x, int y) position)
-    {
-        (int x, int y) minNeighbor = position;
-        double minGValue = double.PositiveInfinity;
-
-        foreach (var neighbor in GetNeighbors(position))
-        {
-            if (gValues.GetValueOrDefault(neighbor, double.PositiveInfinity) < minGValue)
-            {
-                minGValue = gValues[neighbor];
-                minNeighbor = neighbor;
-            }
-        }
-
-        return minNeighbor;
+        Console.Error.WriteLine($"Laz position: {lazPosition}");
+        Console.Error.WriteLine($"Home position: {homePosition}");
     }
 
     static string DirectionTo((int x, int y) from, (int x, int y) to)
@@ -231,4 +145,27 @@ class Player
         if (to.y == from.y - 1) return "N";
         return "";
     }
+
+    static void MoveLaz(string direction)
+    {
+        if (direction == "E")
+            lazPosition = (lazPosition.x + 1, lazPosition.y);
+        else if (direction == "N")
+            lazPosition = (lazPosition.x, lazPosition.y - 1);
+        else if (direction == "W")
+            lazPosition = (lazPosition.x - 1, lazPosition.y);
+        else if (direction == "S")
+            lazPosition = (lazPosition.x, lazPosition.y + 1);
+    }
+
+    static IEnumerable<(int x, int y)> GetNeighbors((int x, int y) position)
+    {
+        yield return (position.x + 1, position.y);
+        yield return (position.x - 1, position.y);
+        yield return (position.x, position.y + 1);
+        yield return (position.x, position.y - 1);
+    }
+
+    static double Heuristic((int x, int y) a, (int x, int y) b) =>
+        Math.Abs(a.x - b.x) + Math.Abs(a.y - b.y);
 }

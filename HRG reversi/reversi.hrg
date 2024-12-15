@@ -1,0 +1,117 @@
+domain Piece = empty | white | black
+domain Player = white | black
+domain Position = null | P(I, J) where I in 0..7, J in 0..7
+domain Score = 50 | 0 | 100
+
+leftUp : Position -> Position
+leftUp(null) = null
+leftUp(P(I, J)) = if I > 0 && J > 0 then P(I - 1, J - 1) else null
+
+up : Position -> Position
+up(null) = null
+up(P(I, J)) = if J > 0 then P(I, J - 1) else null
+
+rightUp : Position -> Position
+rightUp(null) = null
+rightUp(P(I, J)) = if I < 7 && J > 0 then P(I + 1, J - 1) else null
+
+left : Position -> Position
+left(null) = null
+left(P(I, J)) = if I > 0 then P(I - 1, J) else null
+
+right : Position -> Position
+right(null) = null
+right(P(I, J)) = if I < 7 then P(I + 1, J) else null
+
+leftDown : Position -> Position
+leftDown(null) = null
+leftDown(P(I, J)) = if I > 0 && J < 7 then P(I - 1, J + 1) else null
+
+down : Position -> Position
+down(null) = null
+down(P(I, J)) = if J < 7 then P(I, J + 1) else null
+
+rightDown : Position -> Position
+rightDown(null) = null
+rightDown(P(I, J)) = if I < 7 && J < 7 then P(I + 1, J + 1) else null
+
+board : Position -> Piece = {
+  P(I, J) = if (I == 3 && J == 3) || (I == 4 && J == 4)
+    then white
+    else if (I == 3 && J == 4) || (I == 4 && J == 3)
+      then black
+      else empty
+  where I in 0..7, J in 0..7
+}
+
+me : Player = white
+
+position : Position
+
+op : Player -> Player
+op(white) = black
+op(black) = white
+
+graph captureInDirection(me: Player, p: Position, dirFunc: Position -> Position) {
+  branch {
+    check(board[p] == me)  // Dotarliśmy do własnego pionka — koniec przejęcia
+  } or {
+    check(board[p] == op(me))  // Przejęcie pionka przeciwnika
+    board[p] = me
+    captureInDirection(me, dirFunc(p), dirFunc)  // Kontynuuj przejęcie w kierunku
+  }
+}
+
+graph checkAndCaptureDirection(me: Player, startPos: Position, dirFunc: Position -> Position) {
+  position = dirFunc(startPos)
+  if position != null && board[position] == op(me) {
+    captureInDirection(me, dirFunc(position), dirFunc)
+  }
+}
+
+graph findNonempty() {
+  forall p:Position {
+    check(board[p] == empty)
+  }
+}
+
+graph turn(me: Player) {
+  player = me
+
+  // Wybierz pole
+  forall position: Position {
+    check(board[position] == empty)  // Pole musi być puste
+
+    // Sprawdź, czy ruch zamyka pionki przeciwnika
+    branch {
+      check(reachable(checkLegalMove(me, position)))
+      board[position] = me  // Ustaw pionek gracza
+      $ position
+    }
+  }
+
+  // Aktualizacja planszy — odwracanie pionków
+  forall dir: Direction {
+    flipDirection(me, position, dir)  // Odwracamy pionki w danym kierunku
+  }
+
+  // Sprawdź, czy gra się kończy
+  player = keeper
+  if not(reachable(findLegalMove(opponent(me)))) {
+    // Jeśli przeciwnik nie ma ruchów, kończymy grę
+    goals[me] = 100
+    goals[op[me]] = 0
+    end()
+  }
+
+  // Przekazanie ruchu przeciwnikowi
+  player = opponent(me)
+}
+
+graph rules() {
+  loop {
+    turn(white)
+    turn(black)
+  }
+}
+ 
