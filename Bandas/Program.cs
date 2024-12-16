@@ -1,4 +1,4 @@
-﻿//#define DEBUG_MODE
+﻿#define DEBUG_MODE
 //#define DEBUG_PRINT
 
 using System;
@@ -69,13 +69,14 @@ public class Utils
 
 struct Board
 {
-    private int[] Rows;
-    private const int MASK = 0b11;
+    private char[,] _board;
     private int height, width;
+    private char myPawn = Variables.MY_ID == 0 ? '0' : '1';
+    private char enemyPawn = Variables.MY_ID == 1 ? '0' : '1';
 
     public Board(int height, int width)
     {
-        Rows = new int[8];
+        _board = new char[height, width];
         this.height = height;
         this.width = width;
     }
@@ -84,22 +85,10 @@ struct Board
     {
         for (int i = 0; i < height; i++)
         {
-            Rows[i] = 0;
-            //Debug.Log(input[i]+"\n");
             for (int j = 0; j < width; j++)
             {
-                int value = input[i][j] switch
-                {
-                    '-' => 0b00,   // Puste pole
-                    '0' => 0b01,   // Gracz 0
-                    '1' => 0b10,   // Gracz 1
-                    'x' => 0b11,   // Dziura
-                    _ => 0b10
-                };
-                //Debug.Log($"Got {input[i][j]}, returned: {value}\n");
-                Rows[i] |= value << (j * 2);
+                _board[i, j] = input[i][j];
             }
-            //Debug.Log($"{Convert.ToString(Rows[i], 2)}\n");
         }
     }
 
@@ -107,157 +96,66 @@ struct Board
     {
         for (int i = 0; i < height; i++)
         {
-            int row = Rows[i];
-            int rightmostMyPawn = FindRightmostMyPawn(row);
-            if (rightmostMyPawn == -1)
-                continue;
-            int mask = (1 << ((rightmostMyPawn + 1) * 2)) - 1;
-            int extractedBits = row & mask;
-            extractedBits >>= 2;
-            row &= ~mask;
-            row |= extractedBits;
-            Rows[i] = row;
+            bool movingLeft = false;
+            int currentIdx = width - 1;
+            while (currentIdx > 0)
+            {
+                if (_board[i, currentIdx] == enemyPawn && !movingLeft)
+                    currentIdx--;
+                if (_board[i, currentIdx] == myPawn && !movingLeft)
+            }
+
         }
     }
 
     public void MoveRight()
     {
-        for (int i = 0; i < height; i++)
-        {
-            int row = Rows[i];
-            int leftmostMyPawn = FindLeftmostMyPawn(row);
-            if (leftmostMyPawn == -1)
-                continue;
-            int mask = ~((1 << (leftmostMyPawn * 2)) - 1);
-            int extractedBits = row & mask;
-            extractedBits <<= 2;
-            row &= ~mask;
-            row |= extractedBits;
-            row &= (1 << (width * 2)) - 1;
-            Rows[i] = row;
-        }
+        
     }
 
     public void MoveUp()
     {
-        var my_id = Variables.MY_ID == 0 ? 0b01 : 0b10;
-        var enemy_id = Variables.MY_ID == 1 ? 0b01 : 0b10;
-        var EMPTY = 0b00;
-        for (int col = 0; col < width; col++)
-        {
-            int[] column = new int[height];
-
-            // Ekstrakcja kolumny
-            for (int row = 0; row < height; row++)
-            {
-                column[row] = (Rows[row] >> (col * 2)) & MASK;
-            }
-
-            // Przesuwanie kolumny w górę
-            int writePos = 0;
-            for (int readPos = 0; readPos < height; readPos++)
-            {
-                if (column[readPos] == my_id || column[readPos] == enemy_id)
-                {
-                    column[writePos++] = column[readPos];
-                }
-            }
-
-            // Wypełnienie pustych pól na dole kolumny
-            for (int i = writePos; i < height; i++)
-            {
-                column[i] = EMPTY;
-            }
-
-            // Wpisanie zmodyfikowanej kolumny z powrotem
-            for (int row = 0; row < height; row++)
-            {
-                Rows[row] &= ~(MASK << (col * 2));         // Zerowanie starej kolumny
-                Rows[row] |= column[row] << (col * 2);     // Wstawienie nowej wartości
-            }
-        }
+        
     }
 
     public void MoveDown()
     {
-        for (int col = 0; col < width; col++)
-        {
-            int writePos = 7;
-            for (int row = 7; row >= 0; row--)
-            {
-                int cell = (Rows[row] >> (col * 2)) & MASK;
-                if (cell == 0b00 || cell == 0b01)
-                {
-                    Rows[writePos] |= cell << (col * 2);
-                    if (writePos != row) Rows[row] &= ~(MASK << (col * 2));
-                    writePos--;
-                }
-            }
-        }
+        
+    }
+
+    public void Transpose()
+    {
+        
     }
 
     public void RemoveEmptyRowsAndColumns()
     {
-        for (int i = 0; i < height; i++)
-        {
-            if (IsRowEmpty(i)) Rows[i] = ~0; // Ustaw cały rząd na dziury (0b11)
-        }
-        for (int col = 0; col < width; col++)
-        {
-            if (IsColumnEmpty(col)) SetColumnToHoles(col);
-        }
+        
     }
 
     private bool IsRowEmpty(int row)
     {
-        for (int j = 0; j < width; j++)
-        {
-            int cell = (Rows[row] >> (j * 2)) & MASK;
-            if (cell != 0b10) return false; // Niepusty
-        }
         return true;
     }
 
     private bool IsColumnEmpty(int col)
     {
-        for (int row = 0; row < width; row++)
-        {
-            int cell = (Rows[row] >> (col * 2)) & MASK;
-            if (cell != 0b10) return false;
-        }
         return true;
     }
 
     private void SetColumnToHoles(int col)
     {
-        for (int row = 0; row < width; row++)
-        {
-            Rows[row] |= (0b11 << (col * 2));
-        }
+        
     }
 
     private int FindRightmostMyPawn(int row)
     {
-        var my_id = Variables.MY_ID == 0 ? 0b01 : 0b10;
-        for (int pos = 7; pos >= 0; pos--)
-        {
-            int cell = (row >> (pos * 2)) & MASK;
-            if (cell == my_id)
-                return pos;
-        }
-        return -1;
+        return 0;
     }
 
     private int FindLeftmostMyPawn(int row)
     {
-        var my_id = Variables.MY_ID == 0 ? 0b01 : 0b10;
-        for (int pos = 0; pos < width; pos++)
-        {
-            int cell = (row >> (pos * 2)) & MASK;
-            if (cell == my_id)
-                return pos;
-        }
-        return -1;
+        return 0;
     }
 
     public void Print()
@@ -266,15 +164,7 @@ struct Board
         {
             for (int j = 0; j < width; j++)
             {
-                int cell = (Rows[i] >> (j*2)) & MASK;
-                Console.Error.Write(cell switch
-                {
-                    0b00 => "- ",
-                    0b01 => "0 ",
-                    0b10 => "1 ",
-                    0b11 => "x ",
-                    _ => "? "
-                });
+                Console.Error.Write($"{_board[i, j]} ");
             }
             Console.Error.WriteLine();
         }
@@ -284,36 +174,58 @@ struct Board
 class Player
 {
     public const long NOGC_SIZE = 67_108_864;
+    string _test_file = "test.txt";
     static void Main(string[] args)
     {
+#if DEBUG_MODE
+        int myId = 0;
+        int height = 8;
+        int width = 8;
+#else
         int myId = int.Parse(Console.ReadLine());
         int height = int.Parse(Console.ReadLine());
         int width = int.Parse(Console.ReadLine());
+#endif
         int enemy_id = 1 - myId;
         Variables.MY_ID = myId;
         Debug.Log($"My id: {myId}, enemy: {enemy_id}\n");
         Debug.Log($"{height}x{width}\n");
         Utils.globalWatch.Start();
 
-        Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
         GC.TryStartNoGCRegion(NOGC_SIZE);
 
         Board board = new Board(height, width);
+#if !DEBUG_MODE
         while (true)
         {
+#endif
             List<string> lines = new List<string>();
-            
+
+#if DEBUG_MODE
+            string[] fileLines = File.ReadAllLines("test.txt");
+            int lineIndex = 0;
+
+            lineIndex = 3;
+
+            for (int i = 0; i < height; i++)
+            {
+                lines.Add(fileLines[lineIndex++].Replace(" ", string.Empty));
+            }
+#else
+            // Normalnie wczytujemy dane z konsoli
             for (int i = 0; i < height; i++)
             {
                 lines.Add(Console.ReadLine().Replace(" ", string.Empty));
             }
+#endif
 
             board.Initialize(lines.ToArray());
             board.Print();
-            board.MoveRight();
+            board.MoveUp();
             board.Print();
-            Console.WriteLine("RIGHT"); // UP | RIGHT | DOWN | LEFT
-
+            Console.WriteLine("UP"); // UP | RIGHT | DOWN | LEFT
+#if !DEBUG_MODE
         }
+#endif
     }
 }
