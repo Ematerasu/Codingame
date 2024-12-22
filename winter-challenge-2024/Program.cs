@@ -1,8 +1,11 @@
-﻿using System;
+﻿#define DEBUG_MODE
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 
-
+namespace winter_challenge_2024;
 
 public class Debug
 {
@@ -39,161 +42,125 @@ public enum Direction
     N, E, S, W, X,
 }
 
-public struct Cell
+public class Entity
 {
     public CellType Type { get; set; } = CellType.EMPTY;
-    public int Owner { get; set; } = -1;
-    public int OrganId { get; set; } = -1;
+    public int OwnerId { get; set; } = -1;
+    public int Id { get; set; } = 0;
+    public Direction Dir { get; set; } = Direction.X;
+    public int ParentId { get; set; } = 0;
+    public List<int> ChildrenId = new List<int>(4);
+    public int OrganRootId { get; set; } = 0;
+    public (int x, int y) Position { get; set; } = (0, 0);
 
-    public Cell() { }
-    public Cell(CellType type, int owner, int organId) 
+    public Entity() { }
+
+    public Entity Clone()
     {
-        Type = type;
-        Owner = owner;
-        OrganId = organId;
+        return new Entity
+        {
+            Type = this.Type,
+            OwnerId = this.OwnerId,
+            Id = this.Id,
+            Dir = this.Dir,
+            ParentId = this.ParentId,
+            ChildrenId = this.ChildrenId,
+            OrganRootId = this.OrganRootId,
+            Position = this.Position
+        };
     }
 }
 
-public class Organ
-{
-    public int Id;
-    public int OwnerId;
-    public CellType Type;
-    public (int x, int y) Position;
-    public int ParentId;
-    public int[] Children = new int[4]; // array containing children ids
-    public int ChildrenCnt;
-
-}
 public class GameState
 {
     public int Width { get; private set; }
     public int Height { get; private set; }
 
-    public Cell[,] Grid;
+    public Entity[,] Grid;
+    public (int A, int B, int C, int D) Player0Proteins;
+    public (int A, int B, int C, int D) Player1Proteins;
 
-    // Organ storage
-    private Organ[] Organs; // Fixed-size array for organs
-    private int OrganCount; // Current number of organs
+    public Dictionary<int, Entity> Player0Entities;
+    public Dictionary<int, Entity> Player1Entities;
 
-    // precomputed lookups
-    private Organ[] BasicOrgans;
-    private int BasicOrgansCnt;
-    private Organ[] HarvesterOrgans;
-    private int HarvesterOrgansCnt;
-    private Organ[] TentacleOrgans;
-    private int TentacleOrgansCnt;
-    private Organ[] SporerOrgans;
-    private int SporerOrgansCnt;
-    private Organ[] RootOrgans;
-    private int RootOrgansCnt;
-    
+    public int OrganCnt;
 
-    // Player-organ mapping
-    private int[,] PlayerOrganMap; // [playerId, index] -> organId
-    private int[] PlayerOrganCount; // Current count of organs for each player
-
-    // Maximum allowed organs per player
-    private const int MaxOrgansPerPlayer = 256;
-
-    public GameState(int width, int height, int maxOrgans = 512, int maxPlayers = 2)
+    public GameState(int width, int height)
     {
         Width = width;
         Height = height;
-        Grid = new Cell[width, height];
-        Organs = new Organ[maxOrgans];
-        OrganCount = 0;
-        PlayerOrganMap = new int[maxPlayers, MaxOrgansPerPlayer];
-        PlayerOrganCount = new int[maxPlayers];
-        BasicOrgans = new Organ[maxOrgans];
-        HarvesterOrgans = new Organ[maxOrgans];
-        TentacleOrgans = new Organ[maxOrgans];
-        SporerOrgans = new Organ[maxOrgans];
-        RootOrgans = new Organ[maxOrgans];
-        BasicOrgansCnt = 0;
-        HarvesterOrgansCnt = 0;
-        TentacleOrgansCnt = 0;
-        SporerOrgansCnt = 0;
-        RootOrgansCnt = 0;
+        Grid = new Entity[width, height];
 
         for (int x = 0; x < width; x++)
         {
             for (int y = 0; y < height; y++)
             {
-                Grid[x, y] = new Cell();
+                Grid[x, y] = new Entity() { Position = (x, y) };
             }
         }
+        Player0Proteins = (0, 0, 0, 0);
+        Player1Proteins = (0, 0, 0, 0);
+
+        Player0Entities = new();
+        Player1Entities = new();
     }
 
-    public void AddOrgan(int ownerId, CellType type, (int x, int y) position, int parentId = -1)
+
+
+    public void AddEntity((int x, int y) position, CellType type, int ownerId, int organId, Direction dir, int parentId, int rootId)
     {
-        if (OrganCount >= Organs.Length)
-            throw new InvalidOperationException("Max number of organs reached.");
-
-        var organ = new Organ
-        {
-            Id = OrganCount,
-            OwnerId = ownerId,
-            Type = type,
-            Position = position,
-            ParentId = parentId,
-            Children = new int[4],
-            ChildrenCnt = 0,
-        };
-
-        Organs[OrganCount] = organ;
-
-        // Link to player
-        if (PlayerOrganCount[ownerId] >= MaxOrgansPerPlayer)
-            throw new InvalidOperationException("Max organs per player reached.");
-
-        PlayerOrganMap[ownerId, PlayerOrganCount[ownerId]] = OrganCount;
-        PlayerOrganCount[ownerId]++;
-
-        // Update parent
-        if (parentId != -1)
-        {
-            var parent = Organs[parentId];
-            parent.Children[++parent.ChildrenCnt] = organ.Id; // Add this organ as a child
-        }
-
-        // Update grid
-        Grid[position.x, position.y] = new Cell(type, ownerId, OrganCount);
-
-        OrganCount++;
-    }
-
-    public void RemoveOrgan(int organId)
-    {
-        if (organId < 0 || organId >= OrganCount)
+        var currEntity = Grid[position.x, position.y];
+        if (currEntity.Id == organId && currEntity.Type == type)
             return;
+        var entity = new Entity();
+        entity.OwnerId = ownerId;
+        entity.ParentId = parentId;
+        entity.Position = position;
+        entity.Type = type;
+        entity.Dir = dir;
+        entity.Id = organId;
+        entity.OrganRootId = rootId;
 
-        var organ = Organs[organId];
-        var ownerId = organ.OwnerId;
-
-        // Remove from player mapping
-        for (int i = 0; i < PlayerOrganCount[ownerId]; i++)
+        Grid[position.x, position.y] = entity;
+        if (ownerId == 0)
         {
-            if (PlayerOrganMap[ownerId, i] == organId)
+            //Debug.Log($"{position} {type} {organId} {parentId}\n");
+            Player0Entities.Add(organId, entity);
+            if (type != CellType.ROOT)
+                Player0Entities[parentId].ChildrenId.Add(organId);
+        }
+        else if (ownerId == 1)
+        {
+            Player1Entities.Add(organId, entity);
+            if (type != CellType.ROOT)
+                Player1Entities[parentId].ChildrenId.Add(organId);
+        }
+    }
+
+    public void RemoveOrgan(Entity entity)
+    {
+        var organId = entity.Id;
+        if (entity.OwnerId == 0)
+        {
+            Player0Entities.Remove(organId);
+            if (entity.Type != CellType.ROOT)
+                Player0Entities[entity.ParentId].ChildrenId.Remove(organId);
+            foreach (var child in entity.ChildrenId)
             {
-                PlayerOrganMap[ownerId, i] = PlayerOrganMap[ownerId, PlayerOrganCount[ownerId] - 1];
-                PlayerOrganCount[ownerId]--;
-                break;
+                RemoveOrgan(Player0Entities[child]);
             }
         }
-
-        for (int i = 0; i < organ.ChildrenCnt; i++)
+        else if (entity.OwnerId == 1)
         {
-            RemoveOrgan(organ.Children[i]);
-            organ.Children[i] = 0;
+            Player1Entities.Remove(organId);
+            if (entity.Type != CellType.ROOT)
+                Player1Entities[entity.ParentId].ChildrenId.Remove(organId);
+            foreach(var child in entity.ChildrenId)
+            {
+                RemoveOrgan(Player1Entities[child]);
+            }
         }
-
-
-        // Clear organ
-        Organs[organId] = null;
-
-        // Update grid
-        Grid[organ.Position.x, organ.Position.y] = new Cell();
+        Grid[entity.Position.x, entity.Position.y] = new Entity();
     }
 
     public GameState Simulate(int rounds)
@@ -219,16 +186,7 @@ public class GameState
 
     private void Grow()
     {
-        for (int i = 0; i < OrganCount; i++)
-        {
-            var organ = Organs[i];
-            if (organ.Type == CellType.ROOT || organ.Type == CellType.BASIC)
-            {
-                // Example grow logic
-                var newPos = (organ.Position.x + 1, organ.Position.y); // Dummy position
-                AddOrgan(organ.OwnerId, CellType.BASIC, newPos, organ.Id);
-            }
-        }
+        // TODO
     }
 
     private void Spore()
@@ -253,36 +211,39 @@ public class GameState
 
     public float Evaluate()
     {
-        float score = 0;
-
-        for (int i = 0; i < OrganCount; i++)
-        {
-            var organ = Organs[i];
-            if (organ.Type == CellType.HARVESTER)
-                score += 10;
-        }
-
-        return score;
+        // TODO
+        return 0f;
     }
 
-    private GameState Clone()
+    public GameState Clone()
     {
-        var newState = new GameState(Width, Height, Organs.Length);
+        var newState = new GameState(Width, Height);
 
-        Array.Copy(Grid, newState.Grid, Grid.Length);
-        Array.Copy(Organs, newState.Organs, Organs.Length);
-        Array.Copy(PlayerOrganMap, newState.PlayerOrganMap, PlayerOrganMap.Length);
-        Array.Copy(PlayerOrganCount, newState.PlayerOrganCount, PlayerOrganCount.Length);
-
-        newState.OrganCount = OrganCount;
-
+        for (int x = 0; x < Width; x++)
+        {
+            for (int y = 0; y < Height; y++)
+            {
+                var entity = Grid[x, y];
+                newState.AddEntity(entity.Position, entity.Type, entity.OwnerId, entity.Id, entity.Dir, entity.ParentId, entity.OrganRootId);
+            }
+        }
+        newState.Player0Proteins = Player0Proteins;
+        newState.Player1Proteins = Player1Proteins;
         return newState;
     }
 
-    private static int BitScan(int mask)
+    public void Print()
     {
-        // Find the index of the first set bit (LSB)
-        return (int)Math.Log2(mask & -mask);
+        for (int y = 0; y < Height; y++)
+        {
+            for (int x = 0; x < Width; x++)
+            {
+                var cellType = Grid[x, y].Type;
+                Console.Error.Write(Utils.CellTypeToString(cellType));
+            }
+            Console.Error.WriteLine();
+        }
+        Console.Error.WriteLine();
     }
 }
 
@@ -416,6 +377,55 @@ public class Utils
             _ => (0, 0),
         };
     }
+
+    public static CellType StringToCellType(string type)
+    {
+        return type switch
+        {
+            "WALL" => CellType.WALL,
+            "ROOT" => CellType.ROOT,
+            "BASIC" => CellType.BASIC,
+            "HARVESTER" => CellType.HARVESTER,
+            "TENTACLE" => CellType.TENTACLE,
+            "SPORER" => CellType.SPORER,
+            "A" => CellType.PROTEIN_A,
+            "B" => CellType.PROTEIN_B,
+            "C" => CellType.PROTEIN_C,
+            "D" => CellType.PROTEIN_D,
+            _ => CellType.EMPTY,
+        };
+    }
+
+    public static Direction StringToDirection(string dir)
+    {
+        return dir switch
+        {
+            "N" => Direction.N,
+            "E" => Direction.E,
+            "W" => Direction.W,
+            "S" => Direction.S,
+            _ => Direction.X,
+        };
+    }
+
+    public static string CellTypeToString(CellType cellType)
+    {
+        return cellType switch
+        {
+            CellType.EMPTY => ".",
+            CellType.WALL => "W",
+            CellType.ROOT => "R",
+            CellType.BASIC => "B",
+            CellType.HARVESTER => "H",
+            CellType.TENTACLE => "T",
+            CellType.SPORER => "S",
+            CellType.PROTEIN_A => "A",
+            CellType.PROTEIN_B => "B",
+            CellType.PROTEIN_C => "C",
+            CellType.PROTEIN_D => "D",
+            _ => "."
+        };
+    }
 }
 
 /**
@@ -425,15 +435,28 @@ class MainClass
 {
     static void Main(string[] args)
     {
+        GameState gameState;
+
+#if DEBUG_MODE
+        Console.WriteLine("DEBUG_MODE is ON. Generating GameState using GameStateGenerator...");
+        var random = new Random();
+        gameState = GameStateGenerator.GenerateGameState(random);
+        PrintDebugState(gameState);
+        Console.WriteLine();
+        var cloned = gameState.Clone();
+        PrintDebugState(cloned);
+#else
         string[] inputs;
         inputs = Console.ReadLine().Split(' ');
         int width = int.Parse(inputs[0]); // columns in the game grid
         int height = int.Parse(inputs[1]); // rows in the game grid
-        GameState gameState = new GameState(width, height);
+        gameState = new GameState(width, height);
+
         // game loop
         while (true)
         {
             int entityCount = int.Parse(Console.ReadLine());
+            Utils.globalWatch.Start();
             for (int i = 0; i < entityCount; i++)
             {
                 inputs = Console.ReadLine().Split(' ');
@@ -445,20 +468,57 @@ class MainClass
                 string organDir = inputs[5]; // N,E,S,W or X if not an organ
                 int organParentId = int.Parse(inputs[6]);
                 int organRootId = int.Parse(inputs[7]);
-                //gameState.UpdateCell(x, y, type, owner, organId, organParentId, organRootId);
+                gameState.AddEntity(
+                    (x, y), Utils.StringToCellType(type), owner, organId, Utils.StringToDirection(organDir), organParentId, organRootId
+                );
             }
             inputs = Console.ReadLine().Split(' ');
             int myA = int.Parse(inputs[0]);
             int myB = int.Parse(inputs[1]);
             int myC = int.Parse(inputs[2]);
             int myD = int.Parse(inputs[3]); // your protein stock
+            gameState.Player1Proteins = (myA, myB, myC, myD);
             inputs = Console.ReadLine().Split(' ');
             int oppA = int.Parse(inputs[0]);
             int oppB = int.Parse(inputs[1]);
             int oppC = int.Parse(inputs[2]);
             int oppD = int.Parse(inputs[3]); // opponent's protein stock
+            gameState.Player1Proteins = (oppA, oppB, oppC, oppD);
             int requiredActionsCount = int.Parse(Console.ReadLine()); // your number of organisms, output an action for each one in any order
+            var cloned = gameState.Clone();
+            cloned.Print();
+            Console.WriteLine("WAIT");
+            Debug.Log($"{Utils.globalWatch.ElapsedMilliseconds}\n");
+            Utils.globalWatch.Reset();
+        }
+#endif
+    }
 
+#if DEBUG_MODE
+    private static void PrintDebugState(GameState gameState)
+    {
+        Console.WriteLine($"Generated GameState: Width = {gameState.Width}, Height = {gameState.Height}");
+        for (int y = 0; y < gameState.Height; y++)
+        {
+            for (int x = 0; x < gameState.Width; x++)
+            {
+                var cell = gameState.Grid[x, y];
+                Console.Write(cell.Type == CellType.EMPTY ? "." : cell.Type.ToString()[0]); // Print first letter of CellType or '.' for EMPTY
+            }
+            Console.WriteLine();
+        }
+
+        Console.WriteLine("Player 0 Entities:");
+        foreach (var entity in gameState.Player0Entities.Values)
+        {
+            Console.WriteLine($"Entity ID: {entity.Id}, Type: {entity.Type}, Position: {entity.Position}");
+        }
+
+        Console.WriteLine("Player 1 Entities:");
+        foreach (var entity in gameState.Player1Entities.Values)
+        {
+            Console.WriteLine($"Entity ID: {entity.Id}, Type: {entity.Type}, Position: {entity.Position}");
         }
     }
+#endif
 }
