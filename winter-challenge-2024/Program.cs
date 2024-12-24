@@ -5,8 +5,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Linq;
+
 
 namespace winter_challenge_2024;
 
@@ -122,15 +125,15 @@ public class GameState
         Turn = 0;
     }
 
-    public void AddEntity((int x, int y) position, CellType type, int ownerId, Direction dir, int parentId)
+    public void AddEntity((int x, int y) position, CellType type, int entityId, int ownerId, Direction dir, int parentId)
     {
         var currEntity = Grid[position.x, position.y];
 
         if (currEntity.Type == type)
             return;
-
+        Debug.Log($"{position} {type} {ownerId} {parentId}\n");
         if (ownerId != -1)
-            OrganCnt++;
+            OrganCnt = Math.Max(OrganCnt, entityId);
 
         var newEntity = new Entity
         {
@@ -138,17 +141,17 @@ public class GameState
             Type = type,
             OwnerId = ownerId,
             Dir = dir,
-            Id = OrganCnt,
+            Id = entityId,
             ParentId = parentId,
         };
-
-        newEntity.OrganRootId = (type == CellType.ROOT)
-            ? OrganCnt
-            : GetRootId(ownerId, parentId);
+        if (ownerId != -1)
+            newEntity.OrganRootId = (type == CellType.ROOT)
+                ? entityId
+                : GetRootId(ownerId, parentId);
 
         Grid[position.x, position.y] = newEntity;
-
-        AddEntityToPlayer(newEntity, ownerId, parentId);
+        if (ownerId != -1)
+            AddEntityToPlayer(newEntity, ownerId, parentId);
     }
 
     private int GetRootId(int ownerId, int parentId)
@@ -173,7 +176,7 @@ public class GameState
         {
             //Debug.Log($"Parent ID {parentId} not found for new entity {entity.Id}. " +
                        //$"Player entities: {string.Join(", ", playerEntities.Keys)}\n");
-        throw new Exception($"Parent ID {parentId} not found for new entity {entity.Id}.\n");
+            throw new Exception($"Parent ID {parentId} not found for new entity {entity.Id}.\n");
         }
 
         //Debug.Log($"Adding entity {entity.Id} of type {entity.Type} for owner {ownerId} with parent {parentId}.\n");
@@ -269,7 +272,7 @@ public class GameState
         var playerEntities = playerId == 0 ? Player0Entities : Player1Entities;
         var playerProteins = playerId == 0 ? Player0Proteins : Player1Proteins;
 
-        var rootEntities = playerEntities.Values.Where(e => e.Type == CellType.ROOT).ToList();
+        var rootEntities = playerEntities.Where(kvp => kvp.Value.Type == CellType.ROOT).Select(kvp => kvp.Value).ToList();
         var possibleActionsPerRoot  = new List<List<Action>>();
 
         var directions = new (int x, int y)[]{ (0, 1), (1, 0), (-1, 0), (0, -1) };
@@ -534,7 +537,7 @@ public class GameState
             for (int y = 0; y < Height; y++)
             {
                 var entity = Grid[x, y];
-                newState.AddEntity(entity.Position, entity.Type, entity.OwnerId, entity.Dir, entity.ParentId);
+                newState.AddEntity(entity.Position, entity.Type, entity.Id, entity.OwnerId, entity.Dir, entity.ParentId);
             }
         }
         newState.Player0Proteins = Player0Proteins;
@@ -591,6 +594,7 @@ public class GameState
             AddEntity(
                 (action.X, action.Y),
                 action.Type,
+                ++OrganCnt,
                 playerId,
                 action.Direction,
                 action.Id
@@ -602,6 +606,7 @@ public class GameState
             AddEntity(
                 (action.X, action.Y),
                 action.Type,
+                ++OrganCnt,
                 playerId,
                 action.Direction,
                 action.Id
@@ -997,6 +1002,7 @@ class MainClass
         
 
 #else
+        var bot1 = new RandomBot(1);
         string[] inputs;
         inputs = Console.ReadLine().Split(' ');
         int width = int.Parse(inputs[0]); // columns in the game grid
@@ -1020,7 +1026,7 @@ class MainClass
                 int organParentId = int.Parse(inputs[6]);
                 int organRootId = int.Parse(inputs[7]);
                 gameState.AddEntity(
-                    (x, y), Utils.StringToCellType(type), owner, organId, Utils.StringToDirection(organDir), organParentId, organRootId
+                    (x, y), Utils.StringToCellType(type), owner, Utils.StringToDirection(organDir), organParentId
                 );
             }
             inputs = Console.ReadLine().Split(' ');
@@ -1034,11 +1040,14 @@ class MainClass
             int oppB = int.Parse(inputs[1]);
             int oppC = int.Parse(inputs[2]);
             int oppD = int.Parse(inputs[3]); // opponent's protein stock
-            gameState.Player1Proteins = (oppA, oppB, oppC, oppD);
+            gameState.Player0Proteins = (oppA, oppB, oppC, oppD);
             int requiredActionsCount = int.Parse(Console.ReadLine()); // your number of organisms, output an action for each one in any order
-            var cloned = gameState.Clone();
-            cloned.Print();
-            Console.WriteLine("WAIT");
+            var actions = bot1.Evaluate(gameState);
+            foreach(var action in actions)
+            {
+                Console.WriteLine(action.ToString());
+            }
+            
             Debug.Log($"{Utils.globalWatch.ElapsedMilliseconds}\n");
             Utils.globalWatch.Reset();
         }

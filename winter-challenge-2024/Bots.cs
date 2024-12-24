@@ -16,7 +16,6 @@ class RandomBot
     public List<Action> Evaluate(GameState gameState)
     {
         var actionsList = gameState.GetPossibleActions(PlayerId);
-        var myEntities = PlayerId == 0 ? gameState.Player0Entities : gameState.Player1Entities;
         List<Action> chosen = new();
         foreach(var actions in actionsList)
         {

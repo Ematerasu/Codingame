@@ -69,8 +69,8 @@ public class GameStateGenerator
         usedCoords.Add(spawn1);
 
         // Dodaj jednostki graczy (opcjonalne, jeśli potrzebujesz ich w testach)
-        AddPlayerEntities(gameState, 0, spawn0);
-        AddPlayerEntities(gameState, 1, spawn1);
+        AddPlayerEntities(gameState, 0, 1, spawn0);
+        AddPlayerEntities(gameState, 1, 2, spawn1);
         var proteins = (random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1));
         gameState.Player0Proteins = proteins;
         gameState.Player1Proteins = proteins;
@@ -102,8 +102,8 @@ public class GameStateGenerator
         gameState.Grid[coord.x, coord.y].Type = CellType.EMPTY;
     }
 
-    private static void AddPlayerEntities(GameState gameState, int playerId, (int x, int y) spawnCoord)
+    private static void AddPlayerEntities(GameState gameState, int playerId, int id, (int x, int y) spawnCoord)
     {
-        gameState.AddEntity(spawnCoord, CellType.ROOT, playerId, Direction.X, gameState.OrganCnt+1);
+        gameState.AddEntity(spawnCoord, CellType.ROOT, id, playerId, Direction.X, gameState.OrganCnt+1);
     }
 }
