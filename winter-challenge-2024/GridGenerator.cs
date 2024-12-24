@@ -5,7 +5,9 @@ using winter_challenge_2024;
 public class GameStateGenerator
 {
     private static readonly int GRID_W_RATIO = 2;
-    private static readonly int MAX_SPAWN_DIST_FROM_CORNER = 3;
+    private static readonly int MAX_SPAWN_DIST_FROM_CORNER = 4;
+    private static readonly int MAX_PROTEINS = 10;
+    private static readonly int MIN_PROTEINS = 3;
 
     public static GameState GenerateGameState(Random random)
     {
@@ -33,7 +35,7 @@ public class GameStateGenerator
         }
 
         // Generuj przeszkody (WALL)
-        int maxObstacleCount = (int)(0.5 * width * height); // Max 50% przeszkód
+        int maxObstacleCount = (int)(0.30 * width * height); // Max 50% przeszkód
         HashSet<(int x, int y)> usedCoords = new HashSet<(int x, int y)>();
         for (int i = 0; i < maxObstacleCount; i++)
         {
@@ -46,7 +48,7 @@ public class GameStateGenerator
         }
 
         // Generuj białka (PROTEIN_*)
-        int maxProteinCount = (int)(0.25 * width * height); // Max 25% białek
+        int maxProteinCount = (int)(0.15 * width * height); // Max 25% białek
         CellType[] proteinTypes = { CellType.PROTEIN_A, CellType.PROTEIN_B, CellType.PROTEIN_C, CellType.PROTEIN_D };
         for (int i = 0; i < maxProteinCount; i++)
         {
@@ -69,7 +71,9 @@ public class GameStateGenerator
         // Dodaj jednostki graczy (opcjonalne, jeśli potrzebujesz ich w testach)
         AddPlayerEntities(gameState, 0, spawn0);
         AddPlayerEntities(gameState, 1, spawn1);
-
+        var proteins = (random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1));
+        gameState.Player0Proteins = proteins;
+        gameState.Player1Proteins = proteins;
         return gameState;
     }
 
@@ -100,20 +104,6 @@ public class GameStateGenerator
 
     private static void AddPlayerEntities(GameState gameState, int playerId, (int x, int y) spawnCoord)
     {
-        // Dodaj przykładową jednostkę ROOT gracza na pozycji startowej
-        Entity root = new Entity
-        {
-            Type = CellType.ROOT,
-            OwnerId = playerId,
-            Id = gameState.OrganCnt++,
-            Position = spawnCoord
-        };
-
-        if (playerId == 0)
-            gameState.Player0Entities[root.Id] = root;
-        else
-            gameState.Player1Entities[root.Id] = root;
-
-        gameState.Grid[spawnCoord.x, spawnCoord.y] = root;
+        gameState.AddEntity(spawnCoord, CellType.ROOT, playerId, Direction.X, gameState.OrganCnt+1);
     }
 }
