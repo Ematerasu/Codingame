@@ -104,6 +104,6 @@ public class GameStateGenerator
 
     private static void AddPlayerEntities(GameState gameState, int playerId, int id, (int x, int y) spawnCoord)
     {
-        gameState.AddEntity(spawnCoord, CellType.ROOT, id, playerId, Direction.X, gameState.OrganCnt+1);
+        gameState.AddEntity(spawnCoord, CellType.ROOT, id, playerId, Direction.X, id, id);
     }
 }

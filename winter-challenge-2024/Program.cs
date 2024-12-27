@@ -1,18 +1,19 @@
 ﻿#define DEBUG_MODE
+//#define EVO_MODE
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Linq;
+using System.Net;
 
-
+#if DEBUG_MODE
 namespace winter_challenge_2024;
-
+#endif
 public class Debug
 {
     public static void Log(string msg)
@@ -59,6 +60,8 @@ public class Entity
     public int OrganRootId { get; set; } = -1;
     public (int x, int y) Position { get; set; } = (0, 0);
 
+    public bool IsUpToDate = false;
+
     public Entity() { }
 
     public Entity Clone()
@@ -70,9 +73,10 @@ public class Entity
             Id = this.Id,
             Dir = this.Dir,
             ParentId = this.ParentId,
-            ChildrenId = this.ChildrenId,
+            ChildrenId = new List<int>(this.ChildrenId),
             OrganRootId = this.OrganRootId,
-            Position = this.Position
+            Position = this.Position,
+            IsUpToDate = this.IsUpToDate,
         };
     }
 
@@ -96,6 +100,7 @@ public class GameState
     public Dictionary<int, Entity> Player1Entities;
     public List<Entity> Harvesters;
     public List<Entity> Tentacles;
+    public List<Entity> Roots;
     public int Turn {get; private set; }
 
     public int OrganCnt;
@@ -122,18 +127,22 @@ public class GameState
         Player1Entities = new();
         Harvesters = new();
         Tentacles = new();
+        Roots = new();
         Turn = 0;
     }
 
-    public void AddEntity((int x, int y) position, CellType type, int entityId, int ownerId, Direction dir, int parentId)
+    public void AddEntity((int x, int y) position, CellType type, int entityId, int ownerId, Direction dir, int parentId, int organRootId)
     {
-        var currEntity = Grid[position.x, position.y];
-
-        if (currEntity.Type == type)
-            return;
-        Debug.Log($"{position} {type} {ownerId} {parentId}\n");
         if (ownerId != -1)
+        {
             OrganCnt = Math.Max(OrganCnt, entityId);
+        }
+        var current = Grid[position.x, position.y];
+        if (current.Type == type && current.Id == entityId) 
+        {
+            current.IsUpToDate = true;
+            return;
+        }
 
         var newEntity = new Entity
         {
@@ -143,30 +152,53 @@ public class GameState
             Dir = dir,
             Id = entityId,
             ParentId = parentId,
+            OrganRootId = organRootId,
+            IsUpToDate = true,
         };
-        if (ownerId != -1)
-            newEntity.OrganRootId = (type == CellType.ROOT)
-                ? entityId
-                : GetRootId(ownerId, parentId);
 
         Grid[position.x, position.y] = newEntity;
         if (ownerId != -1)
             AddEntityToPlayer(newEntity, ownerId, parentId);
     }
 
-    private int GetRootId(int ownerId, int parentId)
-{
-    var playerEntities = ownerId == 0 ? Player0Entities : Player1Entities;
-
-    if (!playerEntities.TryGetValue(parentId, out var parentEntity))
+    public void AddEntity(Action action, int playerId)
     {
-        //Debug.Log($"Parent ID {parentId} not found for owner {ownerId}. Current entities: " +
-                       //$"{string.Join(", ", playerEntities.Keys)}\n");
-        throw new KeyNotFoundException($"Parent ID {parentId} not found for owner {ownerId}.");
+        if (!IsPositionValid((action.X, action.Y)) || !IsValidSpotToGrow(Grid[action.X, action.Y].Type))
+            return;
+        var playerEntities = playerId == 0 ? Player0Entities : Player1Entities;
+        if (!playerEntities.ContainsKey(action.Id))
+            return;
+        var entity = new Entity()
+        {
+            Position = (action.X, action.Y),
+            Type = action.Type,
+            OwnerId = playerId,
+            Dir = action.Direction,
+            ParentId = action.Id,
+            Id = ++OrganCnt, 
+        };
+
+        entity.OrganRootId = action.Command == CommandEnum.SPORE ? 
+                            action.Id : 
+                            GetRootId(playerId, entity.ParentId);
+
+        Grid[action.X, action.Y] = entity;
+        AddEntityToPlayer(entity, playerId, entity.ParentId);
     }
 
-    return parentEntity.OrganRootId;
-}
+    private int GetRootId(int ownerId, int parentId)
+    {
+        var playerEntities = ownerId == 0 ? Player0Entities : Player1Entities;
+
+        if (!playerEntities.TryGetValue(parentId, out var parentEntity))
+        {
+            //Debug.Log($"Parent ID {parentId} not found for owner {ownerId}. Current entities: " +
+                        //$"{string.Join(", ", playerEntities.Keys)}\n");
+            throw new KeyNotFoundException($"Parent ID {parentId} not found for owner {ownerId}.");
+        }
+
+        return parentEntity.OrganRootId;
+    }
 
     private void AddEntityToPlayer(Entity entity, int ownerId, int parentId)
     {
@@ -176,7 +208,7 @@ public class GameState
         {
             //Debug.Log($"Parent ID {parentId} not found for new entity {entity.Id}. " +
                        //$"Player entities: {string.Join(", ", playerEntities.Keys)}\n");
-            throw new Exception($"Parent ID {parentId} not found for new entity {entity.Id}.\n");
+        throw new Exception($"Parent ID {parentId} not found for new entity {entity.Id}.\n");
         }
 
         //Debug.Log($"Adding entity {entity.Id} of type {entity.Type} for owner {ownerId} with parent {parentId}.\n");
@@ -204,7 +236,6 @@ public class GameState
     {
         var entitiesToRemove = new List<Entity>();
 
-        // Funkcja rekurencyjna zbierająca encje do usunięcia
         void CollectEntitiesToRemove(Entity currentEntity)
         {
             entitiesToRemove.Add(currentEntity);
@@ -223,21 +254,18 @@ public class GameState
             }
         }
 
-        // Zbieraj encje
         CollectEntitiesToRemove(entity);
 
         foreach (var organ in entitiesToRemove)
         {
             var ownerEntities = organ.OwnerId == 0 ? Player0Entities : Player1Entities;
 
-            // Usuń z globalnej mapy encji **natychmiast** przed dalszymi operacjami
             if (ownerEntities.ContainsKey(organ.Id))
             {
                 //Debug.Log($"Removing entity {organ.Id} from global map.\n");
                 ownerEntities.Remove(organ.Id);
             }
 
-            // Usuń HARVESTER lub TENTACLE z odpowiednich list
             if (organ.Type == CellType.HARVESTER)
             {
                 Harvesters.Remove(organ);
@@ -247,36 +275,53 @@ public class GameState
                 Tentacles.Remove(organ);
             }
 
-            // Aktualizuj rodzica (usuń referencje do tego organu jako dziecka)
             if (organ.Type != CellType.ROOT && ownerEntities.TryGetValue(organ.ParentId, out var parentEntity))
             {
                 //Debug.Log($"Removing child {organ.Id} from parent {parentEntity.Id}.\n");
                 parentEntity.ChildrenId.Remove(organ.Id);
             }
 
-            // Resetuj grid
             Grid[organ.Position.x, organ.Position.y] = new Entity { Position = organ.Position };
 
-            // Log szczegółowy
             //Debug.Log($"Removed Entity {organ}\n");
         }
 
-        #if DEBUG_MODE
-        ValidateEntityData();
-        #endif
     }
 
+    public void CleanUpStructures()
+    {
+        List<Entity> toRemove = new();
+        foreach(var kvp in Player0Entities)
+        {
+            if (!kvp.Value.IsUpToDate) toRemove.Add(kvp.Value);
+        }
+        foreach(var kvp in Player1Entities)
+        {
+            if (!kvp.Value.IsUpToDate) toRemove.Add(kvp.Value);
+        }
+        foreach(var organ in toRemove)
+        {
+            RemoveOrgan(organ);
+        }
+    }
     public List<List<Action>> GetPossibleActions(int playerId)
     {        
         Utils.GenerateMovesWatch.Start();
         var playerEntities = playerId == 0 ? Player0Entities : Player1Entities;
         var playerProteins = playerId == 0 ? Player0Proteins : Player1Proteins;
 
-        var rootEntities = playerEntities.Where(kvp => kvp.Value.Type == CellType.ROOT).Select(kvp => kvp.Value).ToList();
+        var rootEntities = playerEntities
+                .Where(kvp => kvp.Value.Type == CellType.ROOT)
+                .Select(kvp => kvp.Value)
+                .ToList();
         var possibleActionsPerRoot  = new List<List<Action>>();
 
-        var directions = new (int x, int y)[]{ (0, 1), (1, 0), (-1, 0), (0, -1) };
-        //Debug.Log($"Valid IDs to build from: \n");
+        var directions = new (int x, int y, Direction dir)[] {
+            (0, 1, Direction.S), 
+            (1, 0, Direction.E), 
+            (-1, 0, Direction.W), 
+            (0, -1, Direction.N)
+        };
         foreach (var root in rootEntities)
         {
             var rootActions = new List<Action>();
@@ -293,7 +338,6 @@ public class GameState
                     (int x, int y) targetPos = (entity.Position.x + direction.x, entity.Position.y + direction.y);
                     if (!IsPositionValid(targetPos) || !IsValidSpotToGrow(Grid[targetPos.x, targetPos.y].Type))
                         continue;
-                    //Debug.Log($"{entity.Id}, ");
                     if (playerProteins.A >= 1)
                     {
                         rootActions.Add(Action.GrowBasic(entity.Id, targetPos.x, targetPos.y));
@@ -301,33 +345,38 @@ public class GameState
 
                     if (playerProteins.C >= 1 && playerProteins.D >= 1)
                     {
-                        rootActions.Add(Action.GrowHarvester(entity.Id, targetPos.x, targetPos.y, Direction.N));
-                        rootActions.Add(Action.GrowHarvester(entity.Id, targetPos.x, targetPos.y, Direction.W));
-                        rootActions.Add(Action.GrowHarvester(entity.Id, targetPos.x, targetPos.y, Direction.S));
-                        rootActions.Add(Action.GrowHarvester(entity.Id, targetPos.x, targetPos.y, Direction.E));
+                        foreach (var harvestDirection in directions)
+                        {
+                            (int x, int y) ttargetPos = (targetPos.x + harvestDirection.x, targetPos.y + harvestDirection.y); 
+                            if (IsPositionValid(ttargetPos) && IsProtein(Grid[ttargetPos.x, ttargetPos.y].Type))
+                                rootActions.Add(Action.GrowHarvester(entity.Id, targetPos.x, targetPos.y, harvestDirection.dir));
+                        }
                     }
 
                     if (playerProteins.B >= 1 && playerProteins.C >= 1)
                     {
-                        rootActions.Add(Action.GrowTentacle(entity.Id, targetPos.x, targetPos.y, Direction.E));
-                        rootActions.Add(Action.GrowTentacle(entity.Id, targetPos.x, targetPos.y, Direction.N));
-                        rootActions.Add(Action.GrowTentacle(entity.Id, targetPos.x, targetPos.y, Direction.S));
-                        rootActions.Add(Action.GrowTentacle(entity.Id, targetPos.x, targetPos.y, Direction.W));
+                        foreach (var tentacleDirection in directions)
+                        {
+                            (int x, int y) ttargetPos = (targetPos.x + tentacleDirection.x, targetPos.y + tentacleDirection.y); 
+                            if (IsPositionValid(ttargetPos) && (Grid[ttargetPos.x, ttargetPos.y].Type == CellType.EMPTY || Grid[ttargetPos.x, ttargetPos.y].OwnerId == 1 - playerId))
+                                rootActions.Add(Action.GrowTentacle(entity.Id, targetPos.x, targetPos.y, tentacleDirection.dir));
+                        }
                     }
 
                     if (playerProteins.B >= 1 && playerProteins.D >= 1)
                     {
-                        rootActions.Add(Action.GrowSporer(entity.Id, targetPos.x, targetPos.y, Direction.E));
-                        rootActions.Add(Action.GrowSporer(entity.Id, targetPos.x, targetPos.y, Direction.N));
-                        rootActions.Add(Action.GrowSporer(entity.Id, targetPos.x, targetPos.y, Direction.S));
-                        rootActions.Add(Action.GrowSporer(entity.Id, targetPos.x, targetPos.y, Direction.W));
+                        foreach (var sporerDirection in directions)
+                        {
+                            (int x, int y) ttargetPos = (targetPos.x + sporerDirection.x, targetPos.y + sporerDirection.y); 
+                            if (IsPositionValid(ttargetPos) && (Grid[ttargetPos.x, ttargetPos.y].Type == CellType.EMPTY || IsProtein(Grid[ttargetPos.x, ttargetPos.y].Type)))
+                                rootActions.Add(Action.GrowSporer(entity.Id, targetPos.x, targetPos.y, sporerDirection.dir));
+                        }
                     }
                 }
 
                 if (entity.Type == CellType.SPORER)
                 {
                     var sporeActions = GetSporeActions(entity, playerProteins);
-                    //Debug.Log($"Adding spore actions for entity {entity.Id}. Actions: {string.Join(", ", sporeActions)}");
                     rootActions.AddRange(sporeActions);
                 }
 
@@ -335,21 +384,18 @@ public class GameState
                 {
                     if (!playerEntities.ContainsKey(childId))
                     {
-                        //Debug.Log($"Child ID {childId} not found for entity {entity.Id}. Removing invalid child.");
-                        entity.ChildrenId.Remove(childId); // Napraw dane w locie
+                        entity.ChildrenId.Remove(childId);
                         continue;
                     }
 
-                    //Debug.Log($"Pushing child entity {childId} to stack for root {root.Id}");
                     stack.Push(playerEntities[childId]);
                 }
             }
-            //Debug.Log("\n");
             if (rootActions.Count == 0) rootActions.Add(Action.Wait());
             possibleActionsPerRoot.Add(rootActions);
         }
         Utils.GenerateMovesWatch.Stop();
-        return possibleActionsPerRoot;
+        return CartesianProduct(possibleActionsPerRoot);
     }
 
     private List<Action> GetSporeActions(Entity sporer, (int A, int B, int C, int D) availableProteins)
@@ -366,7 +412,7 @@ public class GameState
         var currentPos = GetTargetPosition(sporer.Position, sporer.Dir);
         //Debug.Log($"Sporer {sporer.Id} starting spore actions from {sporer.Position} in direction {sporer.Dir}\n");
 
-        while (IsPositionValid(currentPos) && Grid[currentPos.x, currentPos.y].Type != CellType.WALL)
+        while (IsPositionValid(currentPos) && IsValidSpotToGrow(Grid[currentPos.x, currentPos.y].Type))
         {
             //Debug.Log($"Adding spore action for position {currentPos}\n");
             actions.Add(Action.Spore(sporer.Id, currentPos.x, currentPos.y));
@@ -374,6 +420,18 @@ public class GameState
         }
 
         return actions;
+    }
+
+    private List<List<Action>> CartesianProduct(List<List<Action>> possibleActionsPerRoot)
+    {
+        IEnumerable<IEnumerable<Action>> combinations = [Enumerable.Empty<Action>()];
+        foreach (var list in possibleActionsPerRoot)
+        {
+            combinations = from combination in combinations
+                        from action in list
+                        select combination.Append(action);
+        }
+        return combinations.Select(c => c.ToList()).ToList();
     }
 
     public void ProcessTurn(List<Action> player0Actions, List<Action> player1Actions)
@@ -433,6 +491,7 @@ public class GameState
 
     private void Harvest()
     {
+        HashSet<(int x, int y, int playerId)> harvestedAlready = new();
         foreach(var harvester in Harvesters)
         {
             var targetPos = GetTargetPosition(harvester.Position, harvester.Dir);
@@ -441,6 +500,9 @@ public class GameState
             var cellType = Grid[targetPos.x, targetPos.y].Type;
             if (IsProtein(cellType))
             {
+                if(harvestedAlready.Contains((targetPos.x, targetPos.y, harvester.OwnerId)))
+                    continue;
+                harvestedAlready.Add((targetPos.x, targetPos.y, harvester.OwnerId));
                 if (harvester.OwnerId == 0)
                 {
                     switch(cellType)
@@ -522,31 +584,61 @@ public class GameState
         return turnLimitReached || aPlayerHasDied || noMoreSpace || playersCantBuy;
     }
 
-    public float Evaluate()
-    {
-        // TODO
-        return 0f;
-    }
-
     public GameState Clone()
     {
         var newState = new GameState(Width, Height);
 
+        // Tworzenie nowej siatki (Grid) i kopiowanie encji
+        newState.Grid = new Entity[Width, Height];
         for (int x = 0; x < Width; x++)
         {
             for (int y = 0; y < Height; y++)
             {
                 var entity = Grid[x, y];
-                newState.AddEntity(entity.Position, entity.Type, entity.Id, entity.OwnerId, entity.Dir, entity.ParentId);
+                if (entity != null)
+                {
+                    newState.Grid[x, y] = entity.Clone();
+                }
             }
         }
+
+        // Kopiowanie słowników graczy
+        newState.Player0Entities = new Dictionary<int, Entity>();
+        foreach (var kvp in Player0Entities)
+        {
+            newState.Player0Entities[kvp.Key] = kvp.Value.Clone();
+        }
+
+        newState.Player1Entities = new Dictionary<int, Entity>();
+        foreach (var kvp in Player1Entities)
+        {
+            newState.Player1Entities[kvp.Key] = kvp.Value.Clone();
+        }
+
+        // Kopiowanie list zbieraczy i macek
+        newState.Harvesters = new List<Entity>();
+        foreach (var harvester in Harvesters)
+        {
+            newState.Harvesters.Add(harvester.Clone());
+        }
+
+        newState.Tentacles = new List<Entity>();
+        foreach (var tentacle in Tentacles)
+        {
+            newState.Tentacles.Add(tentacle.Clone());
+        }
+
+        // Kopiowanie pozostałych atrybutów gry
         newState.Player0Proteins = Player0Proteins;
         newState.Player1Proteins = Player1Proteins;
         newState.Turn = Turn;
+        newState.OrganCnt = OrganCnt;
+        newState.IsGameOver = IsGameOver;
+
         return newState;
     }
 
-    private bool IsProtein(CellType cell)
+    public bool IsProtein(CellType cell)
     {
         return cell == CellType.PROTEIN_A || cell == CellType.PROTEIN_B || cell == CellType.PROTEIN_C || cell == CellType.PROTEIN_D; 
     }
@@ -577,7 +669,7 @@ public class GameState
         };
     }
 
-    private bool IsPositionValid((int x, int y) position)
+    public bool IsPositionValid((int x, int y) position)
     {
         return position.x >= 0 && position.x < Width && position.y >= 0 && position.y < Height;
     }
@@ -587,30 +679,16 @@ public class GameState
         var playerEntities = playerId == 0 ? Player0Entities : Player1Entities;
         if (!playerEntities.ContainsKey(action.Id)) return;
         CellType currentCell = Grid[action.X, action.Y].Type;
-        //Debug.Log($"Processing action: {action.ToString()}\n");
+        //  Debug.Log($"Processing action: {action.ToString()}\n");
         if (currentCell == CellType.EMPTY)
         {
             // Dodaj nowy organ na pustym polu
-            AddEntity(
-                (action.X, action.Y),
-                action.Type,
-                ++OrganCnt,
-                playerId,
-                action.Direction,
-                action.Id
-            );
+            AddEntity(action, playerId);
             ConsumeProteins(action.Type, playerId);
         }
         else if (IsProtein(currentCell))
         {
-            AddEntity(
-                (action.X, action.Y),
-                action.Type,
-                ++OrganCnt,
-                playerId,
-                action.Direction,
-                action.Id
-            );
+            AddEntity(action, playerId);
             ConsumeProteins(action.Type, playerId);
             CollectProteins(currentCell, playerId);
         }
@@ -744,26 +822,6 @@ public class GameState
         if (player1Cnt > player0Cnt) return 1;
         return 2;
     }
-
-#if DEBUG_MODE
-    private void ValidateEntityData()
-    {
-        foreach (var entity in Player0Entities.Values.Concat(Player1Entities.Values))
-        {
-            foreach (var childId in entity.ChildrenId)
-            {
-                var childExists = entity.OwnerId == 0
-                    ? Player0Entities.ContainsKey(childId)
-                    : Player1Entities.ContainsKey(childId);
-
-                // if (!childExists)
-                // {
-                //     Debug.Log($"Invalid child ID {childId} in entity {entity.Id} for owner {entity.OwnerId}\n");
-                // }
-            }
-        }
-    }
-#endif
 }
 
 public struct Action
@@ -964,31 +1022,40 @@ public class Utils
 **/
 class MainClass
 {
+    public const long NOGC_SIZE = 67_108_864; // 280_000_000;
     static void Main(string[] args)
     {
+#if EVO_MODE
+        StartEvolution();
+        return;
+#endif
         GameState gameState;
 
 #if DEBUG_MODE
-        Console.WriteLine("DEBUG_MODE is ON. Generating GameState using GameStateGenerator...");
+        //Console.WriteLine("DEBUG_MODE is ON. Generating GameState using GameStateGenerator...");
         var random = new Random();
         var bot1 = new RandomBot(0);
-        var bot2 = new RandomBot(1);
+        var bot2 = new HeuristicBot(1);
         var results = new int[3] { 0, 0, 0};
         Utils.globalWatch.Restart();
-        for(int i = 0; i < 1000; i++)
+        for(int i = 0; i < 100; i++)
         {
+            Console.WriteLine($"Game: {i+1}\n");
             gameState = GameStateGenerator.GenerateGameState(random);
             //Console.WriteLine($"Generated GameState: Width = {gameState.Width}, Height = {gameState.Height}");
             //PrintDebugState(gameState);
             //Console.WriteLine();
             while(!gameState.IsGameOver)
             {
+                Utils.watch.Restart();
                 var actions = bot1.Evaluate(gameState);
+                Utils.watch.Restart();
                 var actions1 = bot2.Evaluate(gameState);
                 //Console.WriteLine($"Action for player 0: {actions[0].ToString()}");
                 //Console.WriteLine($"Action for player 1: {actions1[0].ToString()}");
                 gameState.ProcessTurn(actions, actions1);
-                //PrintDebugState(gameState);
+                //Helpers.PrintDebugState(gameState);
+                Utils.watch.Reset();
             }
             results[gameState.GetWinner()]++;
         }
@@ -1002,7 +1069,8 @@ class MainClass
         
 
 #else
-        var bot1 = new RandomBot(1);
+        GC.TryStartNoGCRegion(NOGC_SIZE); // true
+        var bot1 = new HeuristicBot(1);
         string[] inputs;
         inputs = Console.ReadLine().Split(' ');
         int width = int.Parse(inputs[0]); // columns in the game grid
@@ -1026,9 +1094,16 @@ class MainClass
                 int organParentId = int.Parse(inputs[6]);
                 int organRootId = int.Parse(inputs[7]);
                 gameState.AddEntity(
-                    (x, y), Utils.StringToCellType(type), owner, Utils.StringToDirection(organDir), organParentId
+                    (x, y),
+                    Utils.StringToCellType(type),
+                    organId,
+                    owner,
+                    Utils.StringToDirection(organDir),
+                    organParentId,
+                    organRootId
                 );
             }
+            gameState.CleanUpStructures();
             inputs = Console.ReadLine().Split(' ');
             int myA = int.Parse(inputs[0]);
             int myB = int.Parse(inputs[1]);
@@ -1048,74 +1123,19 @@ class MainClass
                 Console.WriteLine(action.ToString());
             }
             
-            Debug.Log($"{Utils.globalWatch.ElapsedMilliseconds}\n");
+            //Debug.Log($"{Utils.globalWatch.ElapsedMilliseconds}\n");
             Utils.globalWatch.Reset();
         }
 #endif
     }
 
-#if DEBUG_MODE
-    private static void PrintDebugState(GameState gameState)
+#if EVO_MODE
+    static void StartEvolution()
     {
-        Console.WriteLine($"Turn: {gameState.Turn}\n");
-        for (int y = 0; y < gameState.Height; y++)
-        {
-            for (int x = 0; x < gameState.Width; x++)
-            {
-                var cell = gameState.Grid[x, y];
-                string cellSign = cell.Type switch {
-                    CellType.WALL => "W",
-                    CellType.ROOT => "R",
-                    CellType.BASIC => "B",
-                    CellType.SPORER => "S",
-                    CellType.TENTACLE => "T",
-                    CellType.HARVESTER => "H",
-                    CellType.PROTEIN_A => "A",
-                    CellType.PROTEIN_B => "B",
-                    CellType.PROTEIN_C => "C",
-                    CellType.PROTEIN_D => "D",
-                    _ => "."
-
-                };
-                Console.Write(cellSign);
-            }
-            Console.WriteLine();
-        }
-
-        Console.WriteLine($"Player 0 proteins: {gameState.Player0Proteins}\n");
-        Console.WriteLine($"Player 1 proteins: {gameState.Player1Proteins}\n");
-
-        // Console.WriteLine("Player 0 Entities:");
-        // foreach (var entity in gameState.Player0Entities.Values)
-        // {
-        //     Console.WriteLine($"Entity ID: {entity.Id}, Type: {entity.Type}, Position: {entity.Position}");
-        // }
-
-        // Console.WriteLine("Player 1 Entities:");
-        // foreach (var entity in gameState.Player1Entities.Values)
-        // {
-        //     Console.WriteLine($"Entity ID: {entity.Id}, Type: {entity.Type}, Position: {entity.Position}");
-        // }
-
-        // Console.WriteLine("Player 0 possible Actions:");
-        // foreach (var rootActions in gameState.GetPossibleActions(0))
-        // {
-        //     foreach(var action in rootActions)
-        //     {
-        //         Console.WriteLine(action.ToString());
-        //     }
-                
-        // }
-
-        // Console.WriteLine("Player 1 possible Actions:");
-        // foreach (var rootActions in gameState.GetPossibleActions(1))
-        // {
-        //     foreach(var action in rootActions)
-        //     {
-        //         Console.WriteLine(action.ToString());
-        //     }
-                
-        // }
+        Random rng = new Random();
+        int populationSize = 5;
+        int generations = 100;
+        Evolution.TrainBots(generations, populationSize, rng);
     }
 #endif
 }
