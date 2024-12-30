@@ -6,10 +6,10 @@ class Evolution
 {
     public static Weights RandomWeights(Random rng)
     {
-        var weights = new float[10]; // Liczba wag zależy od liczby Twoich parametrów.
+        var weights = new int[10]; // Liczba wag zależy od liczby Twoich parametrów.
         for (int i = 0; i < weights.Length; i++)
         {
-            weights[i] = (float)(rng.NextDouble() * 2 - 1); // Wartości w zakresie [-1, 1].
+            weights[i] = (int)(rng.NextDouble() * 2 - 1); // Wartości w zakresie [-1, 1].
         }
         return new Weights(weights);
     }
@@ -29,12 +29,12 @@ class Evolution
 
             for (int i = 0; i < population.Count; i++)
             {
-                var bot1 = new HeuristicBot(0) { Weights = population[i] };
+                var bot1 = new BeamSearchBot(0, 0, 0) { Weights = population[i] };
                 int score = 0;
                 for (int j = 0; j < population.Count; j++)
                 {
                     if (i == j) continue;
-                    var bot2 = new HeuristicBot(1) { Weights = population[j] };
+                    var bot2 = new BeamSearchBot(1, 0, 0) { Weights = population[j] };
                     var result = PlayGame(bot1, bot2, rng, 5);
                     if (result > 0) score++; // Wygrana.
                     else if (result < 0) score--; // Przegrana.
@@ -57,17 +57,17 @@ class Evolution
             Console.Write($"{w}, ");
         }
     }
-    public static int PlayGame(HeuristicBot bot1, HeuristicBot bot2, Random rng, int gamesAmount)
+    public static int PlayGame(BeamSearchBot bot1, BeamSearchBot bot2, Random rng, int gamesAmount)
     {
         int winner = 0;
         for(int i = 0; i < gamesAmount; i++)
         {
-            var gameState = GameStateGenerator.GenerateGameState(rng);
+            NewGameState gameState = new NewGameState(1, 1);
             while (!gameState.IsGameOver)
             {
-                var actions1 = bot1.Evaluate(gameState);
-                var actions2 = bot2.Evaluate(gameState);
-                gameState.ProcessTurn(actions1, actions2);
+                // var actions1 = bot1.Evaluate(gameState);
+                // var actions2 = bot2.Evaluate(gameState);
+                // gameState.ProcessTurn(actions1, actions2);
             }
             var result = gameState.GetWinner();
             if (result == 0) winner++;
@@ -111,7 +111,7 @@ class Evolution
         {
             if (rng.NextDouble() < 0.2) // 20% szansy na mutację.
             {
-                mutated[i] += (float)(rng.NextDouble() * 0.2 - 0.1); // Perturbacja [-0.1, 0.1].
+                //mutated[i] += (float)(rng.NextDouble() * 0.2 - 0.1); // Perturbacja [-0.1, 0.1].
             }
         }
         return new Weights(mutated);
@@ -119,10 +119,10 @@ class Evolution
 
     static Weights CrossOverWeights(Weights parent1, Weights parent2, Random rng)
     {
-        var childParams = new float[parent1.Params.Length];
+        var childParams = new int[parent1.Params.Length];
         for (int i = 0; i < childParams.Length; i++)
         {
-            childParams[i] = rng.NextDouble() < 0.5 ? parent1.Params[i] : parent2.Params[i];
+            //childParams[i] = rng.NextDouble() < 0.5 ? parent1.Params[i] : parent2.Params[i];
         }
         return new Weights(childParams);
     }

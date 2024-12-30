@@ -1,82 +1,11 @@
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
-using System.Linq;
 using System.Text;
-using System.IO;
 
 namespace winter_challenge_2024;
 
 class Helpers
 {
-    public static void PrintDebugState(GameState gameState)
-    {
-        Console.WriteLine($"Turn: {gameState.Turn}\n");
-        for (int y = 0; y < gameState.Height; y++)
-        {
-            for (int x = 0; x < gameState.Width; x++)
-            {
-                var cell = gameState.Grid[x, y];
-                string cellSign = cell.Type switch {
-                    CellType.WALL => "W",
-                    CellType.ROOT => "R",
-                    CellType.BASIC => "B",
-                    CellType.SPORER => "S",
-                    CellType.TENTACLE => "T",
-                    CellType.HARVESTER => "H",
-                    CellType.PROTEIN_A => "A",
-                    CellType.PROTEIN_B => "B",
-                    CellType.PROTEIN_C => "C",
-                    CellType.PROTEIN_D => "D",
-                    _ => "."
-
-                };
-                Console.Write(cellSign);
-            }
-            Console.WriteLine();
-        }
-
-        Console.WriteLine($"Player 0 proteins: {gameState.Player0Proteins}\n");
-        Console.WriteLine($"Player 1 proteins: {gameState.Player1Proteins}\n");
-
-        Console.WriteLine("Player 0 Entities:");
-        foreach (var entity in gameState.Player0Entities.Values)
-        {
-            Console.WriteLine($"Entity ID: {entity.Id}, Type: {entity.Type}, Position: {entity.Position}");
-        }
-
-        Console.WriteLine("Player 1 Entities:");
-        foreach (var entity in gameState.Player1Entities.Values)
-        {
-            Console.WriteLine($"Entity ID: {entity.Id}, Type: {entity.Type}, Position: {entity.Position}");
-        }
-
-        Console.WriteLine("Player 0 possible Actions:");
-        foreach (var rootActions in gameState.GetPossibleActions(0))
-        {
-            foreach(var action in rootActions)
-            {
-                Console.WriteLine(action.ToString());
-            }
-                
-        }
-
-        Console.WriteLine("Player 1 possible Actions:");
-        foreach (var rootActions in gameState.GetPossibleActions(1))
-        {
-            foreach(var action in rootActions)
-            {
-                Console.WriteLine(action.ToString());
-            }
-                
-        }
-    }
-
-    public static void VisualizeDebugState(GameState gameState, string title, string additionalMessage="")
+    public static void VisualizeDebugState(NewGameState gameState, string title, string dir="imgs", string additionalMessage="")
     {
         string tempFilePath = "tmp_visualization.txt";
         
@@ -90,8 +19,8 @@ class Helpers
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "python3",
-                Arguments = $"{visualizerPath} -f {tempFilePath}",
+                FileName = "python",
+                Arguments = $"{visualizerPath} -f {tempFilePath} -d {dir}",
                 UseShellExecute = false,
                 RedirectStandardError = false,
                 RedirectStandardOutput = false,
@@ -105,7 +34,7 @@ class Helpers
         File.Delete(tempFilePath);
     }
 
-    private static string GenerateVisualizationData(GameState gameState, string title, string additionalMessage)
+    private static string GenerateVisualizationData(NewGameState gameState, string title, string additionalMessage)
     {
         StringBuilder builder = new StringBuilder();
 
@@ -113,7 +42,7 @@ class Helpers
         builder.AppendLine($"FRAME {title}");
 
         // Dodaj komendę INIT
-        builder.AppendLine($"INIT {gameState.Width+2} {gameState.Height+2}");
+        builder.AppendLine($"INIT {gameState.Width} {gameState.Height}");
 
         // Dodaj koordynaty
         builder.AppendLine("COORDS H");
@@ -123,52 +52,63 @@ class Helpers
         {
             for (int x = 0; x < gameState.Width; x++)
             {
-                Entity entity = gameState.Grid[x, y];
-                if (entity.Type == CellType.EMPTY)
+                var entity = gameState.Board[x, y];
+                if (entity.IsEmpty)
                 {
                     builder.AppendLine($"CELL {x} {y} E");
                 }
-                else if (entity.Type == CellType.WALL)
+                else if (entity.IsWall)
                 {
                     builder.AppendLine($"CELL {x} {y} W");
                 }
-                else if (entity.Type == CellType.PROTEIN_A)
+                else if (entity.IsResource && entity.OrganOrResourceType == 0b00)
                 {
                     builder.AppendLine($"CELL {x} {y} A");
                 }
-                else if (entity.Type == CellType.PROTEIN_B)
+                else if (entity.IsResource && entity.OrganOrResourceType == 0b01)
                 {
                     builder.AppendLine($"CELL {x} {y} B");
                 }
-                else if (entity.Type == CellType.PROTEIN_C)
+                else if (entity.IsResource && entity.OrganOrResourceType == 0b10)
                 {
                     builder.AppendLine($"CELL {x} {y} C");
                 }
-                else if (entity.Type == CellType.PROTEIN_D)
+                else if (entity.IsResource && entity.OrganOrResourceType == 0b11)
                 {
                     builder.AppendLine($"CELL {x} {y} D");
                 }
                 else
                 {
                     // Struktura: RBSHT,01,NSWE,NSWE
-                    var sourceDir = entity.Dir == Direction.N ? 
-                                    Direction.S : entity.Dir == Direction.E ? 
-                                    Direction.W : entity.Dir == Direction.S ?
-                                    Direction.N : Direction.E;
-                    var dir = entity.Dir != Direction.X ? entity.Dir : Direction.N;
-                    string code = $"{entity.Type.ToString()[0]}{entity.OwnerId}{dir}{sourceDir}";
+                    string type = "";
+                    if (entity.OrganOrResourceType == 0b00 && entity.Rotation == 0b00) type = "R";
+                    else if (entity.OrganOrResourceType == 0b00 && entity.Rotation == 0b11) type = "B";
+                    else if (entity.OrganOrResourceType == 0b01) type = "H";
+                    else if (entity.OrganOrResourceType == 0b10) type = "T";
+                    else if (entity.OrganOrResourceType == 0b11) type = "S";
+                    string dir = "";
+                    if (entity.OrganOrResourceType == 0b00 && entity.Rotation == 0b00) dir = "N";
+                    else if (entity.OrganOrResourceType == 0b00 && entity.Rotation == 0b11) dir = "N";
+                    else if (entity.Rotation == 0b00) dir = "N";
+                    else if (entity.Rotation == 0b01) dir = "E";
+                    else if (entity.Rotation == 0b10) dir = "S";
+                    else if (entity.Rotation == 0b11) dir = "W";
+                    
+                    var parentPos = gameState.IdToPosition[entity.ParentId];
+                    string dirFrom = Utils.DirToString(Utils.vectorToDir((parentPos.x-x, parentPos.y-y)));
+                    string code = $"{type}{entity.Owner}{dir}{dirFrom}";
                     builder.AppendLine($"CELL {x} {y} {code}");
                 }
             }
         }
 
         // Dodaj zasoby graczy
-        builder.AppendLine($"RES {gameState.Player0Proteins.A} {gameState.Player0Proteins.B} {gameState.Player0Proteins.C} {gameState.Player0Proteins.D} " +
-                           $"{gameState.Player1Proteins.A} {gameState.Player1Proteins.B} {gameState.Player1Proteins.C} {gameState.Player1Proteins.D}");
+        builder.AppendLine($"RES {gameState.OpponentProteins[0]} {gameState.OpponentProteins[1]} {gameState.OpponentProteins[2]} {gameState.OpponentProteins[3]} " +
+                           $"{gameState.PlayerProteins[0]} {gameState.PlayerProteins[1]} {gameState.PlayerProteins[2]} {gameState.PlayerProteins[3]}");
 
         // Dodaj rozmiary (punkty + korzenie)
-        builder.AppendLine($"SIZE {gameState.Player0Entities.Count} {gameState.Player0Entities.Where(kvp => kvp.Value.Type == CellType.ROOT).ToList().Count} " +
-                           $"{gameState.Player1Entities.Count} {gameState.Player1Entities.Where(kvp => kvp.Value.Type == CellType.ROOT).ToList().Count}");
+        // builder.AppendLine($"SIZE {gameState.Player0Entities.Count} {gameState.Player0Entities.Where(kvp => kvp.Value.Type == CellType.ROOT).ToList().Count} " +
+        //                    $"{gameState.Player1Entities.Count} {gameState.Player1Entities.Where(kvp => kvp.Value.Type == CellType.ROOT).ToList().Count}");
 
         // Dodaj tekst z numerem tury
         builder.AppendLine($"TEXTL Turn: {gameState.Turn}");

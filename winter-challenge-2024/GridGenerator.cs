@@ -9,30 +9,14 @@ public class GameStateGenerator
     private static readonly int MAX_PROTEINS = 10;
     private static readonly int MIN_PROTEINS = 3;
 
-    public static GameState GenerateGameState(Random random)
+    public static NewGameState GenerateGameState(Random random)
     {
         // Ustal wymiary planszy
         int height = random.Next(8, 13);
         int width = height * GRID_W_RATIO;
 
         // Tworzymy GameState
-        GameState gameState = new GameState(width, height)
-        {
-            Grid = new Entity[width, height],
-            Player0Entities = new Dictionary<int, Entity>(),
-            Player1Entities = new Dictionary<int, Entity>(),
-            Player0Proteins = (0, 0, 0, 0),
-            Player1Proteins = (0, 0, 0, 0)
-        };
-
-        // Inicjalizuj siatkę jako pustą
-        for (int x = 0; x < width; x++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                gameState.Grid[x, y] = new Entity { Position = (x, y) };
-            }
-        }
+        NewGameState gameState = new NewGameState(width, height);
 
         // Generuj przeszkody (WALL)
         int maxObstacleCount = (int)(0.30 * width * height); // Max 50% przeszkód
@@ -43,7 +27,7 @@ public class GameStateGenerator
             if (coord == null) break;
             (int x, int y) = coord.Value;
 
-            gameState.Grid[x, y].Type = CellType.WALL;
+            gameState.AddEntity(x, y, 0, 0, 0, CellType.WALL, Direction.X, -1);
             usedCoords.Add((x, y));
         }
 
@@ -56,7 +40,7 @@ public class GameStateGenerator
             if (coord == null) break;
             (int x, int y) = coord.Value;
 
-            gameState.Grid[x, y].Type = proteinTypes[i % proteinTypes.Length];
+            gameState.AddEntity(x, y, 0, 0, 0, proteinTypes[i % proteinTypes.Length], Direction.X, -1);
             usedCoords.Add((x, y));
         }
 
@@ -71,9 +55,14 @@ public class GameStateGenerator
         // Dodaj jednostki graczy (opcjonalne, jeśli potrzebujesz ich w testach)
         AddPlayerEntities(gameState, 0, 1, spawn0);
         AddPlayerEntities(gameState, 1, 2, spawn1);
-        var proteins = (random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1), random.Next(MIN_PROTEINS, MAX_PROTEINS+1));
-        gameState.Player0Proteins = proteins;
-        gameState.Player1Proteins = proteins;
+        var proteins = new int[] {
+            random.Next(MIN_PROTEINS, MAX_PROTEINS+1),
+            random.Next(MIN_PROTEINS, MAX_PROTEINS+1),
+            random.Next(MIN_PROTEINS, MAX_PROTEINS+1),
+            random.Next(MIN_PROTEINS, MAX_PROTEINS+1)
+        };
+        gameState.PlayerProteins = (int[])proteins.Clone();
+        gameState.OpponentProteins = (int[])proteins.Clone();
         return gameState;
     }
 
@@ -97,13 +86,13 @@ public class GameStateGenerator
         return (x, y);
     }
 
-    private static void ClearCell(GameState gameState, (int x, int y) coord)
+    private static void ClearCell(NewGameState gameState, (int x, int y) coord)
     {
-        gameState.Grid[coord.x, coord.y].Type = CellType.EMPTY;
+        gameState.Board[coord.x, coord.y].Reset();
     }
 
-    private static void AddPlayerEntities(GameState gameState, int playerId, int id, (int x, int y) spawnCoord)
+    private static void AddPlayerEntities(NewGameState gameState, int playerId, int id, (int x, int y) spawnCoord)
     {
-        gameState.AddEntity(spawnCoord, CellType.ROOT, id, playerId, Direction.X, id, id);
+        gameState.AddEntity(spawnCoord.x, spawnCoord.y, id, id, id, CellType.ROOT, Direction.X, playerId);
     }
 }

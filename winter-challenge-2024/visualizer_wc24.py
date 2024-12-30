@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 IMAGES_DIR_OUT = "imgs"
-FONT = 'UbuntuMono-R.ttf'
+FONT = 'arial.ttf'
 
 CELL_SIZE = 50
 CELL_BORDER = 2
