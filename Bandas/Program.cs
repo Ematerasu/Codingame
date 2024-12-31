@@ -1,4 +1,4 @@
-﻿//#define DEBUG_MODE
+﻿#define DEBUG_MODE
 //#define DEBUG_PRINT
 //#define TEST_MODE
 
@@ -91,6 +91,61 @@ struct Board
         OnePawns = 0;
     }
 
+    public void GenerateBoard(long seed)
+    {
+        Random rng = new Random((int)seed);
+        int pawnsPerPlayer = width * height / 2;
+        int pawnsInCenterSquarePerPlayer = 8;
+
+        for (int pawn = 0; pawn < pawnsInCenterSquarePerPlayer; pawn++)
+        {
+            int i, j;
+            do
+            {
+                i = rng.Next(2, 6);
+                j = rng.Next(2, 6);
+            } while (_board[i, j] != '\0');
+            _board[i, j] = '0';
+            ZeroPawns++;
+        }
+
+        for (int i = 2; i < 6; i++)
+        {
+            for (int j = 2; j < 6; j++)
+            {
+                if (_board[i, j] == '\0')
+                {
+                    _board[i, j] = '1';
+                    OnePawns++;
+                }
+            }
+        }
+
+        for (int pawn = 0; pawn < pawnsPerPlayer - pawnsInCenterSquarePerPlayer; pawn++)
+        {
+            int i, j;
+            do
+            {
+                i = rng.Next(height);
+                j = rng.Next(width);
+            } while (_board[i, j] != '\0');
+            _board[i, j] = '0'; // Gracz 0
+            ZeroPawns++;
+        }
+
+        for (int i = 0; i < height; i++)
+        {
+            for (int j = 0; j < width; j++)
+            {
+                if (_board[i, j] == '\0') // '\0' oznacza puste komórki
+                {
+                    _board[i, j] = '1'; // Gracz 1
+                    OnePawns++;
+                }
+            }
+        }
+    }
+
     public Board Clone()
     {
         Board copy = new Board(height, width);
@@ -99,6 +154,17 @@ struct Board
             for (int j = 0; j < width; j++)
             {
                 copy._board[i, j] = _board[i, j];
+                switch (_board[i, j])
+                {
+                    case '0':
+                        copy.ZeroPawns++;
+                        break;
+                    case '1':
+                        copy.OnePawns++;
+                        break;
+                    default:
+                        break;
+                }
             }
         }
         return copy;
@@ -535,13 +601,15 @@ class Player
     string _test_file = "test.txt";
     static void Main(string[] args)
     {
+#if TEST_MODE
+        RunTests();
+        return;
+#endif
+
 #if DEBUG_MODE
         int myId = 0;
         int height = 8;
         int width = 8;
-#elif TEST_MODE
-        RunTests();
-        return;
 #else
         int myId = int.Parse(Console.ReadLine());
         int height = int.Parse(Console.ReadLine());
@@ -559,10 +627,9 @@ class Player
 #if !DEBUG_MODE
         while (true)
         {
-#endif
+
             List<string> lines = new List<string>();
 
-#if DEBUG_MODE
             string[] fileLines = File.ReadAllLines("test.txt");
             int lineIndex = 0;
 
@@ -572,13 +639,10 @@ class Player
             {
                 lines.Add(fileLines[lineIndex++].Replace(" ", string.Empty));
             }
-#else
-            // Normalnie wczytujemy dane z konsoli
             for (int i = 0; i < height; i++)
             {
                 lines.Add(Console.ReadLine().Replace(" ", string.Empty));
             }
-#endif
 
             board.Initialize(lines.ToArray());
         //for (int k = 0; k < 8; k++)
@@ -597,19 +661,22 @@ class Player
         //board.Print();
         flatmc.Reset(board);
         Console.WriteLine(Utils.DirectionToString(flatmc.Evaluate())); // UP | RIGHT | DOWN | LEFT
-#if !DEBUG_MODE
         }
 #endif
+        var seed = Guid.NewGuid().GetHashCode();
+        Debug.Log($"Seed: {seed}\n");
+        board.GenerateBoard(seed);
+        board.Print();
     }
 
 #if TEST_MODE
     static void RunTests()
     {
-        const int numTests = 10;
+        const int numTests = 2;
 
         for (int testIndex = 1; testIndex <= numTests; testIndex++)
         {
-            string fileName = $"test_{testIndex}.txt";
+            string fileName = $"test{testIndex}.txt";
             Console.WriteLine($"Running test: {fileName}");
 
             if (!File.Exists(fileName))
@@ -625,17 +692,14 @@ class Player
             int height = int.Parse(lines[1]);
             int width = int.Parse(lines[2]);
             Variables.MY_ID = myId;
-
             string[] initialBoard = new string[height];
             for (int i = 0; i < height; i++)
             {
                 initialBoard[i] = lines[3 + i].Replace(" ", string.Empty);
             }
 
-            // Wczytaj oczekiwaną planszę docelową
-            int moveLine = 3 + height + 1; // linia z metodą
+            int moveLine = 3 + height;
             string moveMethod = lines[moveLine].Trim();
-
             string[] expectedBoard = new string[height];
             for (int i = 0; i < height; i++)
             {
