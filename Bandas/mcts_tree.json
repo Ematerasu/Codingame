@@ -1,0 +1,598 @@
+[
+  {
+    "Id": 0,
+    "Parent": 0,
+    "Wins": 116106,
+    "Visits": 119001,
+    "PlayerId": 0,
+    "Children": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  {
+    "Id": 1,
+    "Parent": 0,
+    "Wins": 116106,
+    "Visits": 116106,
+    "PlayerId": 1,
+    "Children": [
+      5,
+      9,
+      13,
+      17
+    ]
+  },
+  {
+    "Id": 2,
+    "Parent": 0,
+    "Wins": 0,
+    "Visits": 965,
+    "PlayerId": 1,
+    "Children": [
+      6,
+      10,
+      14,
+      19
+    ]
+  },
+  {
+    "Id": 3,
+    "Parent": 0,
+    "Wins": 0,
+    "Visits": 965,
+    "PlayerId": 1,
+    "Children": [
+      7,
+      11,
+      15,
+      20
+    ]
+  },
+  {
+    "Id": 4,
+    "Parent": 0,
+    "Wins": 0,
+    "Visits": 965,
+    "PlayerId": 1,
+    "Children": [
+      8,
+      12,
+      16,
+      21
+    ]
+  },
+  {
+    "Id": 5,
+    "Parent": 1,
+    "Wins": 29027,
+    "Visits": 29027,
+    "PlayerId": 0,
+    "Children": [
+      18,
+      31,
+      44,
+      54
+    ]
+  },
+  {
+    "Id": 6,
+    "Parent": 2,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      23,
+      41,
+      60
+    ]
+  },
+  {
+    "Id": 7,
+    "Parent": 3,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      24,
+      42,
+      61
+    ]
+  },
+  {
+    "Id": 8,
+    "Parent": 4,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      25,
+      43,
+      62
+    ]
+  },
+  {
+    "Id": 9,
+    "Parent": 1,
+    "Wins": 29026,
+    "Visits": 29026,
+    "PlayerId": 0,
+    "Children": [
+      22,
+      35,
+      45,
+      58
+    ]
+  },
+  {
+    "Id": 10,
+    "Parent": 2,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      28,
+      46
+    ]
+  },
+  {
+    "Id": 11,
+    "Parent": 3,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      29,
+      47
+    ]
+  },
+  {
+    "Id": 12,
+    "Parent": 4,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      30,
+      48
+    ]
+  },
+  {
+    "Id": 13,
+    "Parent": 1,
+    "Wins": 29026,
+    "Visits": 29026,
+    "PlayerId": 0,
+    "Children": [
+      26,
+      36,
+      49,
+      59
+    ]
+  },
+  {
+    "Id": 14,
+    "Parent": 2,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      32,
+      51
+    ]
+  },
+  {
+    "Id": 15,
+    "Parent": 3,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      33,
+      52
+    ]
+  },
+  {
+    "Id": 16,
+    "Parent": 4,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      34,
+      53
+    ]
+  },
+  {
+    "Id": 17,
+    "Parent": 1,
+    "Wins": 29026,
+    "Visits": 29026,
+    "PlayerId": 0,
+    "Children": [
+      27,
+      40,
+      50,
+      63
+    ]
+  },
+  {
+    "Id": 18,
+    "Parent": 5,
+    "Wins": 7257,
+    "Visits": 7257,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 19,
+    "Parent": 2,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      37,
+      55
+    ]
+  },
+  {
+    "Id": 20,
+    "Parent": 3,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      38,
+      56
+    ]
+  },
+  {
+    "Id": 21,
+    "Parent": 4,
+    "Wins": 0,
+    "Visits": 241,
+    "PlayerId": 0,
+    "Children": [
+      39,
+      57
+    ]
+  },
+  {
+    "Id": 22,
+    "Parent": 9,
+    "Wins": 7257,
+    "Visits": 7257,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 23,
+    "Parent": 6,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 24,
+    "Parent": 7,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 25,
+    "Parent": 8,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 26,
+    "Parent": 13,
+    "Wins": 7257,
+    "Visits": 7257,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 27,
+    "Parent": 17,
+    "Wins": 7257,
+    "Visits": 7257,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 28,
+    "Parent": 10,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 29,
+    "Parent": 11,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 30,
+    "Parent": 12,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 31,
+    "Parent": 5,
+    "Wins": 7257,
+    "Visits": 7257,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 32,
+    "Parent": 14,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 33,
+    "Parent": 15,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 34,
+    "Parent": 16,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 35,
+    "Parent": 9,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 36,
+    "Parent": 13,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 37,
+    "Parent": 19,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 38,
+    "Parent": 20,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 39,
+    "Parent": 21,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 40,
+    "Parent": 17,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 41,
+    "Parent": 6,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 42,
+    "Parent": 7,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 43,
+    "Parent": 8,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 44,
+    "Parent": 5,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 45,
+    "Parent": 9,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 46,
+    "Parent": 10,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 47,
+    "Parent": 11,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 48,
+    "Parent": 12,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 49,
+    "Parent": 13,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 50,
+    "Parent": 17,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 51,
+    "Parent": 14,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 52,
+    "Parent": 15,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 53,
+    "Parent": 16,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 54,
+    "Parent": 5,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 55,
+    "Parent": 19,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 56,
+    "Parent": 20,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 57,
+    "Parent": 21,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 58,
+    "Parent": 9,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 59,
+    "Parent": 13,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 60,
+    "Parent": 6,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 61,
+    "Parent": 7,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 62,
+    "Parent": 8,
+    "Wins": 0,
+    "Visits": 1,
+    "PlayerId": 1,
+    "Children": []
+  },
+  {
+    "Id": 63,
+    "Parent": 17,
+    "Wins": 7256,
+    "Visits": 7256,
+    "PlayerId": 1,
+    "Children": []
+  }
+]

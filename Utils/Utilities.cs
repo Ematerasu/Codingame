@@ -20,7 +20,6 @@ GC.TryStartNoGCRegion(NOGC_SIZE); // true
 
 public static class FastMath
 {
-    // Przybliżenie logarytmu
     public static float FastLog(float x)
     {
         var vx = new FloatIntUnion { FloatValue = x };
@@ -28,7 +27,6 @@ public static class FastMath
         return vx.FloatValue;
     }
 
-    // Przybliżenie pierwiastka kwadratowego
     public static float FastSqrt(float x)
     {
         var vx = new FloatIntUnion { FloatValue = x };
@@ -36,7 +34,6 @@ public static class FastMath
         return vx.FloatValue;
     }
 
-    // Przybliżenie odwrotności pierwiastka
     public static float FastRsqrt(float x)
     {
         return 1.0f / FastSqrt(x);
