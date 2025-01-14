@@ -20,34 +20,45 @@ GC.TryStartNoGCRegion(NOGC_SIZE); // true
 
 public static class FastMath
 {
-    // Przybliżenie logarytmu
     public static float FastLog(float x)
     {
-        var vx = new FloatIntUnion { FloatValue = x };
-        vx.IntValue = (int)(vx.IntValue * 8.262958288192749e-8f) - 87_989_971;
-        return vx.FloatValue;
+        if (x <= 0)
+        {
+            throw new ArgumentException("Logarithm is undefined for non-positive values");
+        }
+
+        float result = 0f;
+
+        int exp = 0;
+        while (x >= 2.0f)
+        {
+            x *= 0.5f;
+            exp++;
+        }
+        
+        float z = x - 1.0f;
+        float z2 = z * z;
+        result = z - (z2 / 2) + (z2 * z / 3) - (z2 * z2 / 4);
+
+        result += exp * 0.69314718f;
+
+        return result;
     }
 
-    // Przybliżenie pierwiastka kwadratowego
     public static float FastSqrt(float x)
     {
-        var vx = new FloatIntUnion { FloatValue = x };
-        vx.IntValue = (1 << 29) + (vx.IntValue >> 1) - (1 << 22);
-        return vx.FloatValue;
-    }
+        if (x < 0)
+        {
+            throw new ArgumentException("Cannot compute square root of negative number");
+        }
 
-    // Przybliżenie odwrotności pierwiastka
-    public static float FastRsqrt(float x)
-    {
-        return 1.0f / FastSqrt(x);
-    }
+        float guess = x * 0.5f;
 
-    [StructLayout(LayoutKind.Explicit)]
-    private struct FloatIntUnion
-    {
-        [FieldOffset(0)]
-        public float FloatValue;
-        [FieldOffset(0)]
-        public int IntValue;
+        for (int i = 0; i < 3; i++)
+        {
+            guess = 0.5f * (guess + x / guess);
+        }
+
+        return guess;
     }
 }
