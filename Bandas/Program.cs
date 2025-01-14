@@ -24,10 +24,8 @@ public static class FastMath
             throw new ArgumentException("Logarithm is undefined for non-positive values");
         }
 
-        // Przybliżenie logarytmu dla wartości x
         float result = 0f;
 
-        // Pierwsze przybliżenie: normalizujemy x do zakresu [1, 2) przy użyciu logarytmu z bazy 2
         int exp = 0;
         while (x >= 2.0f)
         {
@@ -35,14 +33,11 @@ public static class FastMath
             exp++;
         }
         
-        // Teraz x znajduje się w przedziale [1, 2), możemy obliczyć log(x) przy użyciu szybkich przybliżeń
-        // Rozwinięcie Taylora dla logarytmu w pobliżu 1 (log(1 + z) ≈ z - z^2/2 + z^3/3 - ...)
         float z = x - 1.0f;
         float z2 = z * z;
         result = z - (z2 / 2) + (z2 * z / 3) - (z2 * z2 / 4);
 
-        // Przekształcamy logarytm naturalny w kontekście pierwotnej wartości
-        result += exp * 0.69314718f; // log(2) ≈ 0.69314718
+        result += exp * 0.69314718f;
 
         return result;
     }
@@ -54,30 +49,14 @@ public static class FastMath
             throw new ArgumentException("Cannot compute square root of negative number");
         }
 
-        // Początkowy przybliżony wynik - połowa liczby
         float guess = x * 0.5f;
 
-        // Używamy metody Newtona do obliczeń
-        for (int i = 0; i < 3; i++)  // Zwykle 3 iteracje wystarczą dla dobrej dokładności
+        for (int i = 0; i < 3; i++)
         {
             guess = 0.5f * (guess + x / guess);
         }
 
         return guess;
-    }
-
-    public static float FastRsqrt(float x)
-    {
-        return 1.0f / FastSqrt(x);
-    }
-
-    [StructLayout(LayoutKind.Explicit)]
-    private struct FloatIntUnion
-    {
-        [FieldOffset(0)]
-        public float FloatValue;
-        [FieldOffset(0)]
-        public int IntValue;
     }
 }
 
@@ -783,6 +762,15 @@ public class FullMCTS
         currentTree.rootId = 0;
         currentTree.tree[currentTree.rootId] = new Node(state, 0, PlayerID);
         currentTree.size++;
+        for (int i = 0; i < MAX_ACTION; i++)
+        {
+            uint newId = currentTree.size;
+            //Utils.nodeCreationWatch.Start();
+            currentTree.tree[newId] = new Node(currentTree.tree[currentTree.rootId].State, ACTIONS[i], currentTree.rootId, 1 - currentTree.tree[currentTree.rootId].PlayerId);
+            //Utils.nodeCreationWatch.Stop();
+            currentTree.tree[currentTree.rootId].ChildrenId[i] = newId;
+            currentTree.size++;
+        }
     }
 
     public void ReuseTree(Board state)
@@ -829,25 +817,25 @@ public class FullMCTS
     }
     public Direction Evaluate()
     {
-        
+        //for(int i = 0; i < 10000; i++)
         while (Utils.globalWatch.ElapsedMilliseconds < Utils.RESPONSE_TIME - 10)
         {
-            Utils.selectionWatch.Start();
+            //Utils.selectionWatch.Start();
             uint selectedNode = Selection();
-            Utils.selectionWatch.Stop();
-            Utils.expansionWatch.Start();
+            //Utils.selectionWatch.Stop();
+            //Utils.expansionWatch.Start();
             uint newChild = Expand(selectedNode);
-            Utils.expansionWatch.Stop();
+            //Utils.expansionWatch.Stop();
             if (newChild == 0)
             {
                 throw new Exception("Cos sie odjebalo w Expand");
             }
-            Utils.simulationWatch.Start();
+            //Utils.simulationWatch.Start();
             GameResult simulationResult = Simulation(newChild);
-            Utils.simulationWatch.Stop();
-            Utils.backpropagationWatch.Start();
+            //Utils.simulationWatch.Stop();
+            //Utils.backpropagationWatch.Start();
             Backpropagate(newChild, simulationResult);
-            Utils.backpropagationWatch.Stop();
+            //Utils.backpropagationWatch.Stop();
         }
         //PrintTreeState();
         Debug.Log($"FullMCTS did {currentTree.tree[currentTree.rootId].Visits} simulations\n");
@@ -875,7 +863,7 @@ public class FullMCTS
         uint currentId = currentTree.rootId;
         while (!currentTree.tree[currentId].IsLeaf())
         {
-            uint bestChildId = 0;
+            uint bestChildId = currentTree.tree[currentId].ChildrenId[0];
             float bestUCB1 = float.MinValue;
             uint currentNodeVisits = currentTree.tree[currentId].Visits;
             for (int i = 0; i < MAX_ACTION; i++)
@@ -886,7 +874,7 @@ public class FullMCTS
                 uint childVisits = currentTree.tree[childId].Visits; 
                 uint childWins = currentTree.tree[childId].Wins;
                 
-                float ucb1 = (float)childWins / (childVisits + 1) + C * FastMath.FastSqrt(FastMath.FastLog(currentNodeVisits + 1) / (childVisits + 1));
+                float ucb1 = (float)childWins / (childVisits + 1) + C * FastMath.FastSqrt(currentNodeVisits) / (childVisits+1);
                 //Debug.Log($"UCB1 value for: {childId} with {childVisits} visits, {childWins} wins and {currentNodeVisits} parent visits: {ucb1}\n");
                 if (ucb1 > bestUCB1)
                 {
@@ -916,9 +904,9 @@ public class FullMCTS
         for (int i = 0; i < MAX_ACTION; i++)
         {
             uint newId = currentTree.size;
-            Utils.nodeCreationWatch.Start();
+            //Utils.nodeCreationWatch.Start();
             currentTree.tree[newId] = new Node(currentTree.tree[nodeId].State, ACTIONS[i], nodeId, 1 - currentTree.tree[nodeId].PlayerId);
-            Utils.nodeCreationWatch.Stop();
+            //Utils.nodeCreationWatch.Stop();
             currentTree.tree[nodeId].ChildrenId[i] = newId;
             currentTree.size++;
             ids.Add(newId);
@@ -939,14 +927,19 @@ public class FullMCTS
         }
         Board currentState = currentTree.tree[nodeId].State.Clone();
         int currentPlayer = currentTree.tree[nodeId].PlayerId;
-        while (!currentState.IsFinished)
+        int round = 0;
+        while (!currentState.IsFinished && round < 6)
         {
             Direction randomMove = ACTIONS[rng.Next(MAX_ACTION)];
             currentState.Play(randomMove, currentPlayer);
             result = currentState.IsOver();
             currentPlayer = 1 - currentPlayer;
+            round++;
         }
-
+        if (!currentState.IsFinished)
+        {
+            return currentState.ZeroPawns > currentState.OnePawns ? GameResult.PLAYER0_WIN : GameResult.PLAYER1_WIN;
+        }
         return result;
     }
 
