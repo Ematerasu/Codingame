@@ -145,14 +145,16 @@ public struct Board
     public int ZeroPawns, OnePawns;
     public bool IsFinished = false;
     public GameResult FinalResult = GameResult.NOT_FINISHED;
+    private (int up, int down, int left, int right) _bounds;
 
     public Board(int height, int width)
     {
         _board = new char[height, width];
-        this.Height = height;
-        this.Width = width;
+        Height = height;
+        Width = width;
         ZeroPawns = 0;
         OnePawns = 0;
+        _bounds = (0, height-1, 0, width-1);
     }
 
     public void ResetBoard(char[,] board)
@@ -220,6 +222,7 @@ public struct Board
     public Board Clone()
     {
         Board copy = new Board(Height, Width);
+        copy._bounds = _bounds;
         for (int i = 0; i < Height; i++)
         {
             for (int j = 0; j < Width; j++)
@@ -443,22 +446,36 @@ public struct Board
 
     public void RemoveEmptyColumnsAndRows()
     {
-        for (int row = 0; row < Height; row++)
+        if (_bounds.up > _bounds.down || _bounds.left > _bounds.right) return;
+        while (IsRowEmpty(_bounds.up))
         {
-            if (IsRowEmpty(row))
-            {
-                for (int j = 0; j < Width; j++)
-                    _board[row, j] = 'x';
-            }
+            for (int j = 0; j < Width; j++)
+                _board[_bounds.up, j] = 'x';
+            _bounds.up++;
+            if (_bounds.up > _bounds.down) break;
         }
 
-        for (int col = 0; col < Width; col++)
+        while (IsRowEmpty(_bounds.down))
         {
-            if (IsColumnEmpty(col))
-            {
-                for (int j = 0; j < Height; j++)
-                    _board[j, col] = 'x';
-            }
+            for (int j = 0; j < Width; j++)
+                _board[_bounds.down, j] = 'x';
+            _bounds.down--;
+            if (_bounds.up > _bounds.down) break;
+        }
+
+        while (IsColumnEmpty(_bounds.left))
+        {
+            for (int j = 0; j < Height; j++)
+                _board[j, _bounds.left] = 'x';
+            _bounds.left++;
+            if (_bounds.left > _bounds.right) break;
+        }
+        while (IsColumnEmpty(_bounds.right))
+        {
+            for (int j = 0; j < Height; j++)
+                _board[j, _bounds.right] = 'x';
+            _bounds.right--;
+            if (_bounds.left > _bounds.right) break;
         }
     }
 
@@ -624,7 +641,7 @@ class FlatMC
             }
         }
         //Debug.Log($"Current global watch at the end: {Utils.globalWatch.ElapsedMilliseconds}\n");
-        Debug.Log($"FlatMC did {sims} simulations\n");
+        //Debug.Log($"FlatMC did {sims} simulations\n");
         return (Direction)bestIdx;
     }
 
@@ -694,12 +711,12 @@ public class FullMCTS
     private Random rng = new Random();
     readonly Direction[] ACTIONS = new Direction[] {Direction.Down, Direction.Left, Direction.Right, Direction.Up};
     public int PlayerID;
-    public struct Node
+    public class Node
     {
         public int PlayerId;
         public Board State;
-        public uint Wins;
-        public uint Visits;
+        public double Wins;
+        public double Visits;
         public uint Parent;
         public uint[] ChildrenId;
         
@@ -735,7 +752,7 @@ public class FullMCTS
         }
     }
 
-    public struct MCTSTree
+    public class MCTSTree
     {
         public uint rootId = 0;
         public Node[] tree;
@@ -804,7 +821,7 @@ public class FullMCTS
 
         if (!found)
         {
-            Debug.Log("No matching child node found. Resetting tree.\n");
+            //Debug.Log("No matching child node found. Resetting tree.\n");
             currentTree = new MCTSTree();
             currentTree.tree[0] = new Node(state, 0, PlayerID);
             currentTree.size = 1;
@@ -812,7 +829,7 @@ public class FullMCTS
         else
         {
             currentTree.rootId = newRootId;
-            Debug.Log($"Tree reused with new root: {newRootId}\n");
+            //Debug.Log($"Tree reused with new root: {newRootId}\n");
         }
     }
     public Direction Evaluate()
@@ -838,10 +855,10 @@ public class FullMCTS
             //Utils.backpropagationWatch.Stop();
         }
         //PrintTreeState();
-        Debug.Log($"FullMCTS did {currentTree.tree[currentTree.rootId].Visits} simulations\n");
+        //Debug.Log($"FullMCTS did {currentTree.tree[currentTree.rootId].Visits} simulations\n");
 
         uint bestChildId = 0;
-        uint maxVisits = 0;
+        double maxVisits = 0;
         for (int i = 0; i < MAX_ACTION; i++)
         {
             uint childId = currentTree.tree[currentTree.rootId].ChildrenId[i];
@@ -854,7 +871,12 @@ public class FullMCTS
                 bestChildId = childId;
             }
         }
-        //Debug.Log($"We choose {bestChildId} child\n");
+        for(int i=0; i < 4; i++)
+        {
+            uint childId = currentTree.tree[currentTree.rootId].ChildrenId[i];
+            Debug.Log($"MCTS_MAIN: Child {ACTIONS[i]}: Wins: {currentTree.tree[childId].Wins}, Visits: {currentTree.tree[childId].Visits}\n");
+        }
+        Debug.Log($"MCTS_MAIN: Go with {ACTIONS[Array.IndexOf(currentTree.tree[currentTree.rootId].ChildrenId, bestChildId)]}\n\n");
         return ACTIONS[Array.IndexOf(currentTree.tree[currentTree.rootId].ChildrenId, bestChildId)];
     }
 
@@ -864,17 +886,17 @@ public class FullMCTS
         while (!currentTree.tree[currentId].IsLeaf())
         {
             uint bestChildId = currentTree.tree[currentId].ChildrenId[0];
-            float bestUCB1 = float.MinValue;
-            uint currentNodeVisits = currentTree.tree[currentId].Visits;
+            double bestUCB1 = -100.0;
+            double currentNodeVisits = currentTree.tree[currentId].Visits;
             for (int i = 0; i < MAX_ACTION; i++)
             {
                 uint childId = currentTree.tree[currentId].ChildrenId[i];
                 if (childId == 0) continue;
 
-                uint childVisits = currentTree.tree[childId].Visits; 
-                uint childWins = currentTree.tree[childId].Wins;
+                double childVisits = currentTree.tree[childId].Visits; 
+                double childWins = currentTree.tree[childId].Wins;
                 
-                float ucb1 = (float)childWins / (childVisits + 1) + C * FastMath.FastSqrt(currentNodeVisits) / (childVisits+1);
+                double ucb1 = childWins / (childVisits + 1) + C * Math.Sqrt(Math.Log(currentNodeVisits)) / (childVisits+1);
                 //Debug.Log($"UCB1 value for: {childId} with {childVisits} visits, {childWins} wins and {currentNodeVisits} parent visits: {ucb1}\n");
                 if (ucb1 > bestUCB1)
                 {
@@ -946,16 +968,36 @@ public class FullMCTS
     private void Backpropagate(uint nodeId, GameResult result)
     {
         uint currentNode = nodeId;
-        uint score = (result == GameResult.PLAYER1_WIN && PlayerID == 1) || (result == GameResult.PLAYER0_WIN && PlayerID == 0) ? (uint)1 : (uint)0;
         while (currentNode != currentTree.rootId)
         {
             currentTree.tree[currentNode].Visits++;
-            currentTree.tree[currentNode].Wins += score;
+            int parentPlayerId = 1 - currentTree.tree[currentNode].PlayerId;
+
+            if ((result == GameResult.PLAYER0_WIN && parentPlayerId == 0) ||
+                (result == GameResult.PLAYER1_WIN && parentPlayerId == 1))
+            {
+                currentTree.tree[currentNode].Wins += 1.0;
+            }
+            else if ((result == GameResult.PLAYER0_WIN && parentPlayerId == 1) ||
+                    (result == GameResult.PLAYER1_WIN && parentPlayerId == 0))
+            {
+                currentTree.tree[currentNode].Wins -= 1.0;
+            }
             currentNode = currentTree.tree[currentNode].Parent;
         }
 
         currentTree.tree[currentTree.rootId].Visits++;
-        currentTree.tree[currentTree.rootId].Wins += score;
+
+        if ((result == GameResult.PLAYER0_WIN && 1 - PlayerID == 0) ||
+            (result == GameResult.PLAYER1_WIN && 1 - PlayerID == 1))
+        {
+            currentTree.tree[currentTree.rootId].Wins += 1.0;
+        }
+        else if ((result == GameResult.PLAYER0_WIN && 1 - PlayerID == 1) ||
+                (result == GameResult.PLAYER1_WIN && 1 - PlayerID == 0))
+        {
+            currentTree.tree[currentTree.rootId].Wins -= 1.0;
+        }
     }
 
 
@@ -977,6 +1019,405 @@ public class FullMCTS
     }
 }
 
+public class BaseLineMCTS
+{
+    const float C = 1.4f;
+
+    private Random rng = new Random();
+    readonly Direction[] ACTIONS = new Direction[] {Direction.Down, Direction.Left, Direction.Right, Direction.Up};
+    public int PlayerID;
+    private Node? root;
+    private bool _reuseTree = false;
+
+    private class Node
+    {
+        public Node? Parent { get; set; }
+        public Node[] Children { get; set; }
+        public double Visits { get; set; }
+        public double Wins { get; set; }
+        public Board State { get; set; }
+        public int playerId { get; set; }
+
+        public Node(Node? parent, Board state, int playerId)
+        {
+            Parent = parent;
+            State = state;
+            Children = new Node[4];
+            Visits = 0;
+            Wins = 0;
+            this.playerId = playerId;
+        }
+
+        public bool IsFullyExpanded()
+        {
+            for(int i = 0; i < 4; i++)
+            {
+                if (Children[i] == null) return false;
+            }
+            return true;
+        }
+
+        public Node GetBestChild()
+        {
+            double ucb, bestUCB = -100.0;
+            int bestIdx = 0;
+            for(int i = 0; i < 4; i++)
+            {
+                var child = Children[i];
+                ucb = child.Visits > 0 ? child.Wins/child.Visits + C * Math.Sqrt(Math.Log(Visits) / child.Visits) : double.MaxValue;
+                if (ucb > bestUCB)
+                {
+                    bestIdx = i;
+                    bestUCB = ucb;
+                }
+            }
+            return Children[bestIdx];
+        }
+    }
+    public BaseLineMCTS(int playerId, bool reuseTree=false)
+    {
+        PlayerID = playerId;
+        _reuseTree = reuseTree;
+    }
+
+
+    public Direction Evaluate(Board initialState)
+    {
+        if (root == null || !_reuseTree)
+            root = new Node(null, initialState, PlayerID);
+        else
+        {
+            Node? matchingChild = null;
+
+            foreach(var child in root.Children)
+            {
+                foreach (var grandchild in child.Children)
+                {
+                    if (grandchild != null && grandchild.State.Equals(initialState))
+                    {
+                        matchingChild = grandchild;
+                        break;
+                    }
+                }
+                if (matchingChild != null) break;
+            }
+            
+
+            if (matchingChild != null)
+            {
+                root = matchingChild;
+                root.Parent = null;
+                Debug.Log("Reused Tree!\n");
+            }
+            else
+            {
+                root = new Node(null, initialState, PlayerID);
+            }
+        }
+        //for(int i = 0; i < 100 ; i++)
+        while (Utils.globalWatch.ElapsedMilliseconds < Utils.RESPONSE_TIME - 5)
+        {
+            Node selectedNode = Selection(root);
+            Node expandedNode = Expansion(selectedNode);
+            GameResult result = Simulation(expandedNode);
+            Backpropagation(expandedNode, result);
+        }
+
+        int bestChildId = 0;
+        double maxVisits = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            var visits = root.Children[i].Visits;
+            if (visits > maxVisits)
+            {
+                maxVisits = visits;
+                bestChildId = i;
+            }
+        }
+        for(int i=0; i < 4; i++)
+        {
+            Debug.Log($"MCTS2: Child {ACTIONS[i]}: Wins: {root.Children[i].Wins}, Visits: {root.Children[i].Visits}\n");
+        }
+        Debug.Log($"MCTS2: Go with {ACTIONS[bestChildId]}\n\n");
+        return ACTIONS[bestChildId];
+    }
+
+    private Node Selection(Node node)
+    {
+        while (node.IsFullyExpanded())
+        {
+            node = node.GetBestChild();
+        }
+        return node;
+    }
+
+    private Node Expansion(Node node)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            if (node.Children[i] == null)
+            {
+                var newState = node.State.Clone();
+                newState.Play(ACTIONS[i], node.playerId);
+                var newNode = new Node(node, newState, 1 - node.playerId);
+                node.Children[i] = newNode;
+
+                return newNode;
+            }
+        }
+
+        throw new InvalidOperationException("All children are already expanded.");
+    }
+
+    private GameResult Simulation(Node node)
+    {
+        var state = node.State.Clone();
+        var result = state.IsOver();
+        var currPlayer = node.playerId;
+        while(result == GameResult.NOT_FINISHED)
+        {
+            var randomMove = ACTIONS[rng.Next(4)];
+            state.Play(randomMove, currPlayer);
+            currPlayer = 1 - currPlayer;
+            result = state.IsOver();
+        }
+        return result;
+    }
+
+    private void Backpropagation(Node node, GameResult result)
+    {
+        while (node != null)
+        {
+            node.Visits++;
+            int parentPlayerId = 1 - node.playerId;
+
+            if ((result == GameResult.PLAYER0_WIN && parentPlayerId == 0) ||
+                (result == GameResult.PLAYER1_WIN && parentPlayerId == 1))
+            {
+                node.Wins += 1.0;
+            }
+            else if ((result == GameResult.PLAYER0_WIN && parentPlayerId == 1) ||
+                    (result == GameResult.PLAYER1_WIN && parentPlayerId == 0))
+            {
+                node.Wins -= 1.0;
+            }
+            node = node.Parent;
+        }
+    }
+}
+
+public class FullMCTS2
+{
+    const float C = 1.4f;
+
+    private Random rng = new Random();
+    readonly Direction[] ACTIONS = new Direction[] {Direction.Down, Direction.Left, Direction.Right, Direction.Up};
+    public int PlayerID;
+    private Node? root;
+    private bool _reuseTree = false;
+
+    private class Node
+    {
+        public Node? Parent { get; set; }
+        public Node[] Children { get; set; }
+        public double Visits { get; set; }
+        public double Wins { get; set; }
+        public Board State { get; set; }
+        public int playerId { get; set; }
+        public bool IsWinning {get; set;}
+        public bool IsLosing {get; set;}
+
+        public Node(Node? parent, Board state, int playerId)
+        {
+            Parent = parent;
+            State = state;
+            Children = new Node[4];
+            Visits = 0;
+            Wins = 0;
+            this.playerId = playerId;
+            IsWinning = false;
+            IsLosing = false;
+        }
+
+        public bool IsFullyExpanded()
+        {
+            for(int i = 0; i < 4; i++)
+            {
+                if (Children[i] == null) return false;
+            }
+            return true;
+        }
+
+        public Node GetBestChild()
+        {
+            double ucb, bestUCB = -100.0;
+            int bestIdx = 0;
+            for(int i = 0; i < 4; i++)
+            {
+                var child = Children[i];
+                ucb = child.Visits > 0 ? child.Wins/child.Visits + C * Math.Sqrt(Math.Log(Visits) / child.Visits) : double.MaxValue;
+                if (ucb > bestUCB)
+                {
+                    bestIdx = i;
+                    bestUCB = ucb;
+                }
+            }
+            return Children[bestIdx];
+        }
+    }
+    public FullMCTS2(int playerId, bool reuseTree=false)
+    {
+        PlayerID = playerId;
+        _reuseTree = reuseTree;
+    }
+
+
+    public Direction Evaluate(Board initialState)
+    {
+        if (root == null || !_reuseTree)
+            root = new Node(null, initialState, PlayerID);
+        else
+        {
+            Node? matchingChild = null;
+
+            foreach(var child in root.Children)
+            {
+                foreach (var grandchild in child.Children)
+                {
+                    if (grandchild != null && grandchild.State.Equals(initialState))
+                    {
+                        matchingChild = grandchild;
+                        break;
+                    }
+                }
+                if (matchingChild != null) break;
+            }
+            
+
+            if (matchingChild != null)
+            {
+                root = matchingChild;
+                root.Parent = null;
+                Debug.Log("Reused Tree!\n");
+            }
+            else
+            {
+                root = new Node(null, initialState, PlayerID);
+            }
+        }
+        //for(int i = 0; i < 100 ; i++)
+        while (Utils.globalWatch.ElapsedMilliseconds < Utils.RESPONSE_TIME - 3)
+        {
+            Node selectedNode = Selection(root);
+            Node expandedNode = Expansion(selectedNode);
+            GameResult result = Simulation(expandedNode);
+            Backpropagation(expandedNode, result);
+        }
+
+        int bestChildId = 0;
+        double maxVisits = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            var visits = root.Children[i].Visits;
+            if (visits > maxVisits)
+            {
+                maxVisits = visits;
+                bestChildId = i;
+            }
+        }
+        for(int i=0; i < 4; i++)
+        {
+            Debug.Log($"MCTS2: Child {ACTIONS[i]}: Wins: {root.Children[i].Wins}, Visits: {root.Children[i].Visits}\n");
+        }
+        Debug.Log($"MCTS2: Go with {ACTIONS[bestChildId]}\n\n");
+        return ACTIONS[bestChildId];
+    }
+
+    private Node Selection(Node node)
+    {
+        while (node.IsFullyExpanded())
+        {
+            node = node.GetBestChild();
+        }
+        return node;
+    }
+
+    private Node Expansion(Node node)
+    {
+        if (node.IsWinning || node.IsLosing) return node;
+
+        for (int i = 0; i < 4; i++)
+        {
+            if (node.Children[i] == null)
+            {
+                var newState = node.State.Clone();
+                newState.Play(ACTIONS[i], node.playerId);
+                var newNode = new Node(node, newState, 1 - node.playerId);
+                node.Children[i] = newNode;
+
+                return newNode;
+            }
+        }
+
+        throw new InvalidOperationException("All children are already expanded.");
+    }
+
+    private GameResult Simulation(Node node)
+    {
+        if (node.IsWinning) return PlayerID == 0 ? GameResult.PLAYER0_WIN : GameResult.PLAYER1_WIN;
+        if (node.IsLosing) return PlayerID == 1 ? GameResult.PLAYER0_WIN : GameResult.PLAYER1_WIN;
+
+        var state = node.State.Clone();
+        var result = state.IsOver();
+        if (result == GameResult.PLAYER0_WIN)
+        {
+            if (PlayerID == 0) node.IsWinning = true;
+            else node.IsLosing = true;
+
+            return result;
+        }
+        else if (result == GameResult.PLAYER1_WIN)
+        {
+            if (PlayerID == 1) node.IsWinning = true;
+            else node.IsLosing = true;
+
+            return result;
+        }
+        var currPlayer = node.playerId;
+        while(result == GameResult.NOT_FINISHED)
+        {
+            var randomMove = ACTIONS[rng.Next(4)];
+            state.Play(randomMove, currPlayer);
+            currPlayer = 1 - currPlayer;
+            result = state.IsOver();
+        }
+        return result;
+    }
+
+    private void Backpropagation(Node node, GameResult result)
+    {
+        while (node != null)
+        {
+            node.Visits++;
+            int parentPlayerId = 1 - node.playerId;
+
+            if ((result == GameResult.PLAYER0_WIN && parentPlayerId == 0) ||
+                (result == GameResult.PLAYER1_WIN && parentPlayerId == 1))
+            {
+                node.Wins += 1.0;
+            }
+            else if ((result == GameResult.PLAYER0_WIN && parentPlayerId == 1) ||
+                    (result == GameResult.PLAYER1_WIN && parentPlayerId == 0))
+            {
+                node.Wins -= 1.0;
+            }
+            node = node.Parent;
+        }
+    }
+}
+
+
+
 class Player
 {
     public const long NOGC_SIZE = 67_108_864;
@@ -995,14 +1436,13 @@ class Player
         int myId = int.Parse(Console.ReadLine());
         int height = int.Parse(Console.ReadLine());
         int width = int.Parse(Console.ReadLine());
-#endif
         GC.TryStartNoGCRegion(NOGC_SIZE);
+#endif
         int enemy_id = 1 - myId;
         Variables.MY_ID = myId;
         Debug.Log($"My id: {myId}, enemy: {enemy_id}\n");
         Debug.Log($"{height}x{width}\n");
-        var mcts = new FullMCTS(myId);
-
+        var mcts = new FullMCTS2(myId, true);
         Board board = new Board(height, width);
         int round = 1;
 #if !DEBUG_MODE
@@ -1017,52 +1457,58 @@ class Player
 
             board.Initialize(lines.ToArray());
             Utils.globalWatch.Restart();
-            if (round == 1)
-                mcts.Reset(board.Clone());
-            else
-                mcts.ReuseTree(board.Clone());
-            Console.WriteLine(Utils.DirectionToString(mcts.Evaluate()));
+            var move = mcts.Evaluate(board.Clone());
+            Console.WriteLine(Utils.DirectionToString(move));
         }
     }
 }
 #else
-        var seed = Guid.NewGuid().GetHashCode();
-        Debug.Log($"Seed: {seed}\n");
-        var i = 0;
-        var adversary = new FlatMC(enemy_id);
-        board.GenerateBoard(seed);
-        board.Print();
-        GameVisualizer.ClearFolder("imgs");
-        GameVisualizer.VisualizeBoard(board, boardFile: $"Board{i}");
-        var random = new Random(seed);
-        i++;
-        while (board.IsOver() == GameResult.NOT_FINISHED)
+        var adversary = new BaseLineMCTS(enemy_id, true);
+        int player0win = 0;
+        int player1win = 0;
+        for(int game = 0; game < 50; game++)
         {
-            Utils.globalWatch.Restart();
-            if (i == 1)
-                mcts.Reset(board.Clone());
-            else
-                mcts.ReuseTree(board.Clone());
-            var move = mcts.Evaluate();
-            // GameVisualizer.VisualizeMCTSTree(mcts.currentTree);
-            // Console.ReadLine();
-            board.Play(move, myId);
-            GameVisualizer.VisualizeBoard(board, $"Board{i}-Player0-{move}");
-            if (board.IsOver() != GameResult.NOT_FINISHED) break;
-            Utils.globalWatch.Restart();
-            adversary.Reset(board.Clone());
-            move = adversary.Evaluate();
-            board.Play(move, enemy_id);
-            GameVisualizer.VisualizeBoard(board, $"Board{i}-Player1-{move}");
+            round = 1;
+            var seed = Guid.NewGuid().GetHashCode();
+            Debug.Log($"Seed: {seed}\n");
+            var i = 0;
+            board = new Board(height, width);
+            board.GenerateBoard(seed);
+            board.Print();
+            //GameVisualizer.ClearFolder("imgs");
+            //GameVisualizer.VisualizeBoard(board, boardFile: $"Board{i}");
+            var random = new Random(seed);
+            i++;
+            while (board.IsOver() == GameResult.NOT_FINISHED)
+            {
+                Utils.globalWatch.Restart();
+                var move = mcts.Evaluate(board.Clone());
+                // GameVisualizer.VisualizeMCTSTree(mcts.currentTree);
+                // Console.ReadLine();
+                board.Play(move, myId);
+                //GameVisualizer.VisualizeBoard(board, $"Board{i}-Player0-{move}");
+                if (board.IsOver() != GameResult.NOT_FINISHED) break;
+                Utils.globalWatch.Restart();
+                move = adversary.Evaluate(board.Clone());
+                Debug.Log($"Played {move}\n");
+                board.Play(move, enemy_id);
+                //GameVisualizer.VisualizeBoard(board, $"Board{i}-Player1-{move}");
+                i++;
+                //board.Print();
+                round++;
+                if (round > 200) break;
+            }
             i++;
             //board.Print();
-            
+            //GameVisualizer.VisualizeBoard(board, boardFile: $"Board{i}");
+            var result = board.IsOver();
+            if (result == GameResult.PLAYER0_WIN) player0win++;
+            if (result == GameResult.PLAYER1_WIN) player1win++;
         }
-        i++;
-        //board.Print();
-        GameVisualizer.VisualizeBoard(board, boardFile: $"Board{i}");
-        Debug.Log($"{board.IsOver()}\n");
+        Debug.Log($"Player0 wins: {player0win}\n");
+        Debug.Log($"Player1 wins: {player1win}\n");
         Utils.PrintWatches();
+        Debug.Log($"My id: {myId}, enemy: {enemy_id}\n");
     }
 }
 #if TEST_MODE

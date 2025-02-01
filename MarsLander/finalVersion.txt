@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.IO;
 using System.Text;
@@ -328,7 +328,7 @@ public class RHEA
     public Move FindBestMove(GameState initialState)
     {
         var population = _previousPopulation == null
-            ? InitializePopulation()
+            ? InitializePopulation(initialState)
             : ReusePopulation();
         int generation = 0;
         for (; generation < _maxGenerations && Globals.globalWatch.ElapsedMilliseconds < 99; generation++)
@@ -356,17 +356,18 @@ public class RHEA
         return population;
     }
 
-    private Move[][] InitializePopulation()
+    private Move[][] InitializePopulation(GameState initialState)
     {
+        var baseIndividual = GenerateInitialIndividual(initialState);
+
         var population = new Move[_populationSize][];
 
         for (int i = 0; i < _populationSize; i++)
         {
             var individual = new Move[_horizonLength];
-            for(int j = 0; j < _horizonLength; j++)
-            {
-                individual[j] = GameState.ValidMoves[_random.Next(9)];
-            }
+            Array.Copy(baseIndividual, individual, _horizonLength);
+
+            MutateIndividual(individual);
 
             population[i] = individual;
         }
@@ -420,31 +421,24 @@ public class RHEA
             var state = initialState.ForwardModel(individual);
             fitnessScores[i] = ComputeFitness(state);
         }
+
         return fitnessScores;
     }
 
     private double ComputeFitness(GameState state)
     {
-        double initialHorizontalVelocity = state.HorizontalSpeed;
-        double initialVerticalVelocity = state.VerticalSpeed;
-        double flightTime = (2 * Math.Abs(initialVerticalVelocity)) / 3.771;
-        double predictedLandingX = state.X + (initialHorizontalVelocity * flightTime);
+        if (state.Success) return 1e6;
+        if (state.Crashed) return -1e6 - 100 * (Math.Abs(state.Rotation) + Math.Abs(state.HorizontalSpeed) + Math.Abs(state.VerticalSpeed));
 
-        int middleOfLandingSpotX = (Globals.LandingSegment.x1 + Globals.LandingSegment.x2) / 2;
-        double distanceX = state.X - middleOfLandingSpotX;
-        double distanceY = state.Y - Globals.LandingSegment.y1;
-        double distance = Math.Sqrt(distanceX * distanceX + distanceY * distanceY);
-        
-        double speedPenalty = Math.Sqrt(state.HorizontalSpeed*state.HorizontalSpeed + state.VerticalSpeed*state.VerticalSpeed);
-        if (state.Success)
-        return 100 + state.Fuel;
+        (int x, int y) middleOfLandingSpot = ((Globals.LandingSegment.x2 + Globals.LandingSegment.x1) / 2, Globals.LandingSegment.y1);
+        double distancePenalty = 10 * (state.X - middleOfLandingSpot.x) * (state.X - middleOfLandingSpot.x) + (state.Y - middleOfLandingSpot.y) * (state.Y - middleOfLandingSpot.y);
 
-        if (state.Crashed && (state.X >= Globals.LandingSegment.x1 && state.X <= Globals.LandingSegment.x2))
-            return 100 - Math.Abs(state.HorizontalSpeed) / 250 - Math.Abs(state.VerticalSpeed) / 250;
+        double anglePenalty = 10.0 * Math.Abs(state.Rotation);
+        double velocityPenalty = 10.0 * (state.HorizontalSpeed * state.HorizontalSpeed + state.VerticalSpeed * state.VerticalSpeed);
+        double fuelPenalty = 1 * state.Fuel;
 
-        return 100 - distance - speedPenalty / 175;
+        return -(distancePenalty + anglePenalty + velocityPenalty - fuelPenalty);
     }
-
 
     private Move[][] CreateNextGeneration(Move[][] population, double[] fitnessScores)
     {
@@ -562,14 +556,13 @@ class Player
         if (!DEBUG_MODE)
             GC.TryStartNoGCRegion(NOGC_SIZE);
         string[] inputs;
-        RHEA rhea = new RHEA(50, 100, 10, 10000);
+        RHEA rhea = new RHEA(50, 100, 10, 2000);
         TextReader inputReader = DEBUG_MODE ? new StreamReader("input.txt") : Console.In;
 #pragma warning disable CS8604 // Możliwy argument odwołania o wartości null.
         int N = int.Parse(inputReader.ReadLine()); // the number of points used to draw the surface of Mars.
 #pragma warning restore CS8604 // Możliwy argument odwołania o wartości null.
         var surfaceSegments = new (int x1, int y1, int x2, int y2)[N];
         int prevX = 0, prevY = 0;
-        Console.Error.WriteLine(N);
         for (int i = 0; i < N; i++)
         {
 #pragma warning disable CS8602 // Wyłuskanie odwołania, które może mieć wartość null.
@@ -580,7 +573,7 @@ class Player
             if (i > 0)
             {
                 surfaceSegments[i] = (prevX, prevY, landX, landY);
-                Console.Error.WriteLine($"{prevX} {prevY} {landX} {landY}");
+                Console.Error.WriteLine($"Segment: {(prevX, prevY, landX, landY)}");
             }
 
             prevX = landX;
