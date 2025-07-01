@@ -843,10 +843,6 @@ public class FullMCTS
             //Utils.expansionWatch.Start();
             uint newChild = Expand(selectedNode);
             //Utils.expansionWatch.Stop();
-            if (newChild == 0)
-            {
-                throw new Exception("Cos sie odjebalo w Expand");
-            }
             //Utils.simulationWatch.Start();
             GameResult simulationResult = Simulation(newChild);
             //Utils.simulationWatch.Stop();
