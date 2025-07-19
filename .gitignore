@@ -351,3 +351,5 @@ MigrationBackup/
 
 # Rider
 .idea/
+
+*.png

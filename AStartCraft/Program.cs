@@ -906,7 +906,7 @@ class Player
         SimulatedAnnealing.SimulatedAnnealing search = new SimulatedAnnealing.SimulatedAnnealing(state, 500);
 
 #if !DEBUG_MODE
-        //Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+        Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
         GC.TryStartNoGCRegion(NOGC_SIZE); // true
 #endif
         (State bestState, int score) = search.FindBest();
