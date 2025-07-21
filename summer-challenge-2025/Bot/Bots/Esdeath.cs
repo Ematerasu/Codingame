@@ -6,412 +6,527 @@ using System.Runtime.CompilerServices;
 
 namespace SummerChallenge2025.Bot;
 
+public enum Phase
+{
+    Opening,
+    MidGame,
+    EndGame,
+}
+
+public enum Orders : byte
+{
+    StandYourGround = 0,
+    Offensive = 1,
+    Defensive = 2,
+    Retreat = 3,
+    Flank = 4,
+    Hunt = 5,
+}
+
+public static class PhaseOrders
+{
+    public static readonly Dictionary<Phase, Orders[]> AllowedOrders = new()
+    {
+        [Phase.Opening] = new[] { Orders.StandYourGround, Orders.Offensive, Orders.Defensive },
+        [Phase.MidGame] = new[] { Orders.StandYourGround, Orders.Offensive, Orders.Defensive },
+        [Phase.EndGame] = new[] { Orders.StandYourGround, Orders.Offensive, Orders.Defensive }
+    };
+
+    public static Phase DeterminePhase(GameState st, int myId)
+    {
+        int total = 0, alive = 0;
+        foreach (var ag in st.Agents)
+        {
+            if (ag.playerId != myId) continue;
+            total++;
+            if (ag.Alive) alive++;
+        }
+        int turn = st.Turn;
+
+        if (turn < 4)
+            return Phase.Opening;
+
+        if (alive * 2 <= total)
+            return Phase.EndGame;
+
+        return Phase.MidGame;
+    }
+
+}
+
+
 public sealed class Esdeath : AI
 {
-    // ──────────────────────────────────── Tunable weights ────────────────────────────────────
-    private readonly double _wTerritory;
-    private readonly double _wMyWet;
-    private readonly double _wOppWet;
-    private readonly double _wKills;
-    private readonly double _wDeaths;
-    private readonly double _wCover;
-    private readonly double _wDistFront;
 
     // ======= Opponent model =================================================================
     private readonly AI _opponentBot;
 
-    // ──────────────────────────────────── Search params ─────────────────────────────────────
-    private readonly int _depth;
-    private readonly int _beamWidth;
-    private readonly int _kPerAgent;
-
-    // Re‑usable buffer to avoid allocations inside GetLegalOrders
-    private readonly AgentOrder[] _ordersBuf = new AgentOrder[256];
-    private readonly Node[] _beamBuf;
-
-    private static readonly (sbyte dx, sbyte dy)[] _dirs = { (1, 0), (-1, 0), (0, 1), (0, -1) };
+    // ───────────────────────────────── Beam-Search helper ──────────────────────────────
+    private sealed record BeamNode(GameState State, Orders[] Seq, double Score);
 
     // ───────────────────────────────── Cover distance cache ────────────────────────────
-    private int _mapW;
-    private int _mapH;
+    private HashSet<(int x, int y)>[] _coveredTiles;
     private int[] _coverDist = Array.Empty<int>();
+    private bool _first = false;
+    private readonly Random _rng = new();
+    private readonly Stopwatch _timer = new();
+    private int _lastTurn = -1;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int Idx(int x, int y) => y * _mapW + x;
+    private readonly struct Individual
+    {
+        public readonly Orders[] Sequence;
+        public readonly double Score;
+
+        public Individual(Orders[] seq, double score)
+        {
+            Sequence = seq;
+            Score = score;
+        }
+    }
 
     public Esdeath(
-        // evaluation weights (defaults are the hand‑picked values from the write‑up)
-        double wTerritory = 10,
-        double wMyWet = 2,
-        double wOppWet = -3,
-        double wKills = 5,
-        double wDeaths = -4,
-        double wCover = 1.5,
-        double wDistFront = -0.5,
-        // search hyper‑parameters
-        int depth = 5,
-        int beamWidth = 16,
-        int kPerAgent = 5,
         AI? opponent = null
     )
     {
-        _wTerritory = wTerritory;
-        _wMyWet = wMyWet;
-        _wOppWet = wOppWet;
-        _wKills = wKills;
-        _wDeaths = wDeaths;
-        _wCover = wCover;
-        _wDistFront = wDistFront;
-        _depth = depth;
-        _beamWidth = beamWidth;
-        _kPerAgent = kPerAgent;
-        _opponentBot = opponent ?? new CoverBotBit();
-        _beamBuf = new Node[_beamWidth * 4]; // 4× slack
+        _opponentBot = opponent ?? new CoverBot();
+        _coveredTiles = new HashSet<(int x, int y)>[GameState.MaxW * GameState.MaxH];
     }
 
     public override TurnCommand GetMove(GameState st)
     {
-        int budgetMs = st.Turn == 0 ? 995 : 45;
-        var stopwatch = Stopwatch.StartNew();
-        if (_coverDist.Length == 0 || st.W != _mapW || st.H != _mapH)
-            Profiler.Measure("Esdeath.PrecomputeCover", () => PrecomputeCoverDistances(st));
-        int totalNodes = 0;
-        int[] layerNodes = new int[_depth + 1];
-
-        var best = Profiler.Wrap("Esdeath.BeamSearch", () => BeamSearch(st, _depth, _beamWidth, stopwatch, budgetMs, ref totalNodes, layerNodes));
-
-        Console.Error.WriteLine($"[DBG] turn {st.Turn}  explored {totalNodes} nodes  byLayer=[{string.Join(",", layerNodes)}]");
-
-        return best;
-    }
-
-    private void PrecomputeCoverDistances(GameState st)
-    {
-        _mapW = st.W;
-        _mapH = st.H;
-        _coverDist = new int[_mapW * _mapH];
-        Array.Fill(_coverDist, int.MaxValue);
-
-        Queue<(int x, int y)> q = new();
-
-        for (int y = 0; y < _mapH; ++y)
-            for (int x = 0; x < _mapW; ++x)
-            {
-                TileType tt = GameState.Tiles[GameState.ToIndex((byte)x, (byte)y)];
-                if (tt == TileType.HighCover || tt == TileType.LowCover)
-                {
-                    _coverDist[Idx(x, y)] = 0;
-                    q.Enqueue((x, y));
-                }
-            }
-
-        while (q.Count > 0)
+        if (!_first)
         {
-            var (cx, cy) = q.Dequeue();
-            int baseD = _coverDist[Idx(cx, cy)] + 1;
-            foreach (var (dx, dy) in _dirs)
-            {
-                int nx = cx + dx, ny = cy + dy;
-                if (nx < 0 || ny < 0 || nx >= _mapW || ny >= _mapH) continue;
-                int idx = Idx(nx, ny);
-                if (baseD < _coverDist[idx])
-                {
-                    _coverDist[idx] = baseD;
-                    q.Enqueue((nx, ny));
-                }
-            }
+            CalculateCoveredTiles(st);
+            _first = true;
         }
-    }
+        Phase phase = PhaseOrders.DeterminePhase(st, PlayerId);
+        Orders[] legalOrders = PhaseOrders.AllowedOrders[phase];
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int DistanceToNearestCover(int x, int y) => _coverDist[Idx(x, y)];
+        int budgetMs = st.Turn == 0 ? 950 : 47;
+        _timer.Restart();
+        int maxDepth = st.Turn == 0 ? 5 : 3;
+        int beamWidth = 36;
+        var rng = _rng;
 
-    // ──────────────────────────────────── Beam Search core ──────────────────────────────────
-    private TurnCommand BeamSearch(GameState root, int depth, int beamW, Stopwatch sw, int budgetMs, ref int nodeCnt, int[] layerCnt)
-    {
-        int curCnt = 1;
-        _beamBuf[0] = new Node(root, new TurnCommand(GameState.MaxAgents), double.NegativeInfinity);
-        Node best = _beamBuf[0];
-        int myId = PlayerId;
-        Span<AgentOrder> buf = stackalloc AgentOrder[256];
-        for (int d = 0; d < depth; ++d)
+        int depthReached = 0;
+        long generated   = 0;
+
+        var rootClone = st.FastClone();
+        var beam = new List<BeamNode>
         {
-            int nextCnt = 0;
+            new(rootClone, Array.Empty<Orders>(), Evaluate(rootClone, PlayerId))
+        };
 
-            for (int bi = 0; bi < curCnt; ++bi)
+        for (int depth = 0; depth < maxDepth; depth++)
+        {
+            if (_timer.ElapsedMilliseconds > budgetMs - 5)
+                break;
+            depthReached = depth + 1;
+
+            var next = new List<BeamNode>(beamWidth * legalOrders.Length);
+
+            foreach (var node in beam)
             {
-                Node node = _beamBuf[bi];
-                if (sw.ElapsedMilliseconds >= budgetMs) return best.First;
-                foreach (var myCmd in GenerateJointOrders(node.State))
+                foreach (var order in legalOrders)
                 {
-                    GameState clone = null!;
-                    Profiler.Measure("Clone", () => clone = node.State.FastClone());
-                    var rng = new Random();
-                    TurnCommand enemyCmd = default!;
-                    Profiler.Measure("OpponentMove", () => enemyCmd = _opponentBot.GetMove(clone));
+                    if (_timer.ElapsedMilliseconds > budgetMs - 5)
+                        break;      // awaryjne wyjście
 
-                    Profiler.Measure("ApplyMove", () => clone.ApplyInPlace(myCmd, enemyCmd));
+                    // 1) sklonuj stan i zastosuj ruch
+                    var gs = node.State.FastClone();
+                    var myCmd = GenerateOrderCommand(gs, order, PlayerId);
+                    var oppCmd = _opponentBot.GetMove(gs.FastClone());   // ruch wroga
+                    if (PlayerId == 0)
+                        gs.ApplyInPlace(myCmd, oppCmd);   // my => 0, opp => 1
+                    else
+                        gs.ApplyInPlace(oppCmd, myCmd);    // opp => 0, my  => 1
 
-                    double sc = 0;
-                    Profiler.Measure("Evaluate", () => sc = Evaluate(clone, myId));
-                    var child = new Node(clone, d == 0 ? myCmd : node.First, sc);
+                    // 2) nowa sekwencja
+                    var seq = new Orders[node.Seq.Length + 1];
+                    node.Seq.CopyTo(seq, 0);
+                    seq[^1] = order;
 
-                    nodeCnt++;
-                    layerCnt[d + 1]++;
+                    // 3) ocena stanu
+                    double score = Evaluate(gs, PlayerId) - depth * 0.1; // lekka kara za głębiej
 
-                    if (nextCnt < _beamBuf.Length)
-                        _beamBuf[nextCnt++] = child;
-                    else if (sc > best.Score) // rare overflow, replace worst later
-                        best = child;
-
-                    if (sc > best.Score) best = child;
-                    if (sw.ElapsedMilliseconds >= budgetMs) return best.First;
+                    next.Add(new BeamNode(gs, seq, score));
+                    generated++;
                 }
 
-                if (sw.ElapsedMilliseconds >= budgetMs) return best.First;
-
+                node.State.Dispose();
             }
 
-            if (nextCnt == 0) break;
-            Array.Sort(_beamBuf, 0, nextCnt, NodeComparer.Desc);
-            curCnt = nextCnt < _beamWidth ? nextCnt : _beamWidth;
+            // zostaw najlepsze k kandydatów
+            beam = next.OrderByDescending(n => n.Score)
+                    .Take(beamWidth)
+                    .ToList();
         }
 
-        return best.First;
+        BeamNode best = beam.OrderByDescending(n => n.Score).First();
+        Orders firstOrder = best.Seq.Length > 0 ? best.Seq[0] : Orders.StandYourGround;
+        int      kept      = beam.Count;
+        foreach (var n in beam) n.State.Dispose();
+
+        Console.Error.WriteLine($"TURN {st.Turn} | depth={depthReached} | gen={generated} | kept={kept} | time={_timer.ElapsedMilliseconds}ms");
+
+        return GenerateOrderCommand(st, firstOrder, PlayerId);
     }
 
-    // ────────────────────────────── Joint‑order generation w/ heuristics ─────────────────────────────
-    private IEnumerable<TurnCommand> GenerateJointOrders(GameState st)
+    public TurnCommand GenerateOrderCommand(GameState st, Orders order, int myId)
     {
-        // Collect my alive agents once.
-        int[] ids = new int[GameState.MaxAgents];
-        int n = 0;
-        for (int id = 0; id < GameState.MaxAgents; ++id)
-            if (st.Agents[id].Alive && st.Agents[id].playerId == PlayerId)
-                ids[n++] = id;
+        var cmd = new TurnCommand(GameState.MaxAgents);
 
-        // 2. For each agent pick top‑k actions
-        AgentOrder[][] perAgent = new AgentOrder[n][];
-        int[] perCnt = new int[n];
-
-        for (int i = 0; i < n; ++i)
+        for (int id = 0; id < GameState.MaxAgents; id++)
         {
-            int agId = ids[i];
-            int cnt = CustomLegalOrders(st, agId, _ordersBuf);
+            ref readonly var ag = ref st.Agents[id];
+            if (!ag.Alive || ag.playerId != myId) continue;
 
-            // top‑k selection (array, O(N*k))
-            AgentOrder[] top = new AgentOrder[_kPerAgent];
-            double[] topScore = new double[_kPerAgent];
-            int tCnt = 0;
-
-            for (int j = 0; j < cnt; ++j)
+            AgentOrder ao = order switch
             {
-                double sc = LocalHeuristic(st, agId, _ordersBuf[j]);
-                if (tCnt < _kPerAgent)
+                Orders.Offensive => AggressiveOrder(st, id),
+                Orders.Defensive => DefensiveOrder(st, id),
+                Orders.StandYourGround => StandYourGroundOrder(st, id),
+                _ => default
+            };
+
+            cmd.Orders[id] = ao;
+            cmd.ActiveMask |= 1UL << id;
+        }
+
+        return cmd;
+    }
+
+    private AgentOrder AggressiveOrder(GameState st, int id)
+    {
+        ref readonly var ag = ref st.Agents[id];
+        var myClass = GameState.AgentClasses[id];
+        var myStats = AgentUtils.Stats[myClass];
+
+        // Przeciwny brzeg
+        int targetX = st.W - 1;
+        if (ag.X > st.W / 2) targetX = 0;
+
+        // MOVE: jeden krok w stronę targetX
+        byte bestX = ag.X, bestY = ag.Y;
+        int bestDist = GameState.Mdist(ag.X, ag.Y, targetX, ag.Y);
+        foreach (var (dx, dy) in Helpers.Dir4)
+        {
+            byte nx = (byte)(ag.X + dx);
+            byte ny = (byte)(ag.Y + dy);
+            if (!st.InBounds(nx, ny)) continue;
+            int idx = GameState.ToIndex(nx, ny);
+            if (GameState.Tiles[idx] != TileType.Empty || st.Occup.Test(idx)) continue;
+
+            int d = GameState.Mdist(nx, ny, targetX, ny);
+            if (d < bestDist) { bestDist = d; bestX = nx; bestY = ny; }
+        }
+
+        if (ag.SplashBombs > 0)
+        {
+            for (int y = 0; y < st.H; y++)
+                for (int x = 0; x < st.W; x++)
                 {
-                    topScore[tCnt] = sc;
-                    top[tCnt++] = _ordersBuf[j];
-                }
-                else
-                {
-                    // replace worst if better
-                    int worstIdx = 0;
-                    for (int w = 1; w < _kPerAgent; ++w)
-                        if (topScore[w] < topScore[worstIdx]) worstIdx = w;
-                    if (sc > topScore[worstIdx])
+                    if (Math.Abs(x - ag.X) + Math.Abs(y - ag.Y) > 4) continue;
+
+                    int enemies = 0, allies = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int tx = x + dx, ty = y + dy;
+                            if (!st.InBounds(tx, ty)) continue;
+                            int aid = st.AgentAt((byte)tx, (byte)ty);
+                            if (aid == -1) continue;
+                            if (st.Agents[aid].playerId == ag.playerId) allies++; else enemies++;
+                        }
+
+                    if (enemies >= 2 && allies == 0)
                     {
-                        topScore[worstIdx] = sc;
-                        top[worstIdx] = _ordersBuf[j];
+                        return new AgentOrder
+                        {
+                            Move = new MoveAction(MoveType.Step, bestX, bestY),
+                            Combat = new CombatAction(CombatType.Throw, (ushort)x, (byte)y)
+                        };
                     }
                 }
-            }
-            perAgent[i] = top;
-            perCnt[i] = tCnt;
         }
-        // Cartesian product via recursive iterator – avoids big temporary lists.
-        AgentOrder[] chosen = new AgentOrder[n];
-        return Enumerate(0);
 
-        IEnumerable<TurnCommand> Enumerate(int idx)
+        // COMBAT: strzelaj jeśli w zasięgu
+        for (int eid = 0; eid < GameState.MaxAgents; eid++)
         {
-            if (idx == n)
-            {
-                var cmd = new TurnCommand(GameState.MaxAgents);
-                for (int a = 0; a < n; ++a)
+            ref readonly var enemy = ref st.Agents[eid];
+            if (!enemy.Alive || enemy.playerId == ag.playerId) continue;
+            int dist = GameState.Mdist(ag.X, ag.Y, enemy.X, enemy.Y);
+            if (dist <= myStats.OptimalRange * 2 && ag.Cooldown == 0)
+                return new AgentOrder
                 {
-                    int aid = ids[a];
-                    cmd.SetMove(aid, chosen[a].Move);
-                    cmd.SetCombat(aid, chosen[a].Combat);
-                }
-                yield return cmd;
-                yield break;
-            }
-
-            for (int k = 0; k < perCnt[idx]; ++k)
-            {
-                chosen[idx] = perAgent[idx][k];
-                foreach (var c in Enumerate(idx + 1))
-                    yield return c;
-            }
+                    Move = new MoveAction(MoveType.Step, bestX, bestY),
+                    Combat = new CombatAction(CombatType.Shoot, (ushort)eid)
+                };
         }
-    }
-    
-    private int CustomLegalOrders(GameState st, int agentId, Span<AgentOrder> dst)
-    {
-        Span<AgentOrder> buf = stackalloc AgentOrder[256];
-        Span<AgentOrder> bestOrders = stackalloc AgentOrder[_kPerAgent];
-        Span<double> bestScore = stackalloc double[_kPerAgent];
 
-        var sw = Stopwatch.StartNew();
-        int cnt = st.GetLegalOrders(agentId, buf);
-        Profiler.Add("LegalOrders", sw.Elapsed.TotalMilliseconds);
-
-        AgentClass cls = GameState.AgentClasses[agentId];
-        int bestCnt = 0;
-
-        for (int i = 0; i < cnt; ++i)
+        // inaczej: zwykły ruch i hunker
+        return new AgentOrder
         {
-            ref readonly var ord = ref buf[i];
-
-            if (cls == AgentClass.Sniper &&
-                ord.Move.Type == MoveType.Step &&
-                DistanceToNearestCover(ord.Move.X, ord.Move.Y) > 4)
-                continue;
-
-            double sc = LocalHeuristic(st, agentId, ord);
-
-            if (bestCnt < _kPerAgent)
-            {
-                bestOrders[bestCnt] = ord;
-                bestScore[bestCnt++] = sc;
-            }
-            else
-            {
-                int worst = 0;
-                for (int w = 1; w < _kPerAgent; ++w)
-                    if (bestScore[w] < bestScore[worst]) worst = w;
-                if (sc > bestScore[worst])
-                {
-                    bestOrders[worst] = ord;
-                    bestScore[worst] = sc;
-                }
-            }
-        }
-
-        for (int i = 0; i < bestCnt; ++i)
-            dst[i] = bestOrders[i];
-
-        return bestCnt;
+            Move = new MoveAction(MoveType.Step, bestX, bestY),
+            Combat = new CombatAction(CombatType.Hunker)
+        };
     }
 
-    // ─────────────────────────────────── Local (per‑agent) heuristic ──────────────────────────────────
-    private double LocalHeuristic(GameState st, int agentId, in AgentOrder ord)
+    private AgentOrder DefensiveOrder(GameState st, int id)
     {
-        double score = 0;
-        AgentClass cls = GameState.AgentClasses[agentId];
+        ref readonly var ag = ref st.Agents[id];
+        double bestScore = double.NegativeInfinity;
+        (byte x, byte y) bestMove = (ag.X, ag.Y);
 
-        // Combat type bonus
-        switch (ord.Combat.Type)
+        foreach (var (dx, dy) in Helpers.Dir4)
         {
-            case CombatType.Shoot: score += 100; break;
-            case CombatType.Throw: score += 80; break;
-            case CombatType.Hunker: score += 20; break;
-        }
+            byte nx = (byte)(ag.X + dx), ny = (byte)(ag.Y + dy);
+            if (!st.InBounds(nx, ny)) continue;
+            int idx = GameState.ToIndex(nx, ny);
+            if (GameState.Tiles[idx] != TileType.Empty || st.Occup.Test(idx)) continue;
 
-        // Finisher incentive
-        if (ord.Combat.Type == CombatType.Shoot)
-        {
-            int trg = ord.Combat.Arg1;
-            if (trg >= 0 && trg < GameState.MaxAgents && st.Agents[trg].Alive && st.Agents[trg].Wetness >= 80)
-                score += 50;
-        }
-
-        // Movement evaluation
-        if (ord.Move.Type == MoveType.Step)
-        {
-            int nx = ord.Move.X, ny = ord.Move.Y;
-            score -= Math.Abs(nx - st.W / 2); // push forward
-            if (NeighbourCover(st, nx, ny, out bool high)) score += high ? 20 : 10;
-        }
-
-        // Class‑specific tweaks
-        if (cls == AgentClass.Bomber && ord.Combat.Type == CombatType.Throw) score += 25;
-        return score;
-    }
-
-    private static bool NeighbourCover(GameState st, int x, int y, out bool high)
-    {
-        high = false;
-        foreach (var (dx, dy) in _dirs)
-        {
-            int nx = x + dx, ny = y + dy;
-            if (!st.InBounds((byte)nx, (byte)ny)) continue;
-            TileType tt = GameState.Tiles[GameState.ToIndex((byte)nx, (byte)ny)];
-            if (tt == TileType.HighCover) { high = true; return true; }
-            if (tt == TileType.LowCover) return true;
-        }
-        return false;
-    }
-
-    // ─────────────────────────────────── State evaluation ───────────────────────────────────
-    private double Evaluate(GameState gs, int myId)
-    {
-        int territory = myId == 0 ? gs.Score0 - gs.Score1 : gs.Score1 - gs.Score0;
-        int myWet = 0, oppWet = 0, myDead = 0, oppDead = 0;
-        double coverBonus = 0, distFront = 0;
-
-        for (int id = 0; id < GameState.MaxAgents; ++id)
-        {
-            ref readonly var ag = ref gs.Agents[id];
-            if (!ag.Alive)
+            int coverBonus = 0;
+            foreach (var (ox, oy) in Helpers.Dir4)
             {
-                if (ag.playerId == myId) myDead++; else oppDead++;
-                continue;
+                int cx = nx + ox, cy = ny + oy;
+                if (!st.InBounds(cx, cy)) continue;
+                var tile = GameState.Tiles[GameState.ToIndex(cx, cy)];
+                if (tile == TileType.LowCover) coverBonus += 2;
+                if (tile == TileType.HighCover) coverBonus += 4;
             }
 
-            if (ag.playerId == myId)
+            int allyDist = 0;
+            foreach (var other in st.Agents)
             {
-                myWet += 100 - ag.Wetness;
-                distFront += Math.Abs(ag.X - gs.W / 2);
-                coverBonus += CoverScore(gs, ag);
+                if (!other.Alive || other.playerId != ag.playerId || other.X == ag.X && other.Y == ag.Y) continue;
+                allyDist += 5 - GameState.Mdist(nx, ny, other.X, other.Y);  // preferuje bliżej
             }
-            else
+
+            double score = coverBonus + allyDist;
+            if (score > bestScore)
             {
-                oppWet += 100 - ag.Wetness;
+                bestScore = score;
+                bestMove = (nx, ny);
             }
         }
 
-        return  _wTerritory * territory +
-                _wMyWet     * myWet     +
-                _wOppWet    * oppWet    +
-                _wKills     * oppDead   +
-                _wDeaths    * myDead    +
-                _wCover     * coverBonus+
-                _wDistFront * distFront;
+        return new AgentOrder
+        {
+            Move = new MoveAction(MoveType.Step, bestMove.x, bestMove.y),
+            Combat = new CombatAction(CombatType.Hunker)
+        };
     }
 
-    private static double CoverScore(GameState gs, in AgentState ag)
+    private AgentOrder StandYourGroundOrder(GameState st, int id)
     {
-        double best = 0;
-        foreach (var (dx, dy) in _dirs)
+        ref readonly var ag = ref st.Agents[id];
+
+        foreach (var (dx, dy) in Helpers.Dir4)
         {
             int nx = ag.X + dx;
             int ny = ag.Y + dy;
-            if (nx < 0 || ny < 0 || nx >= gs.W || ny >= gs.H) continue;
-            TileType tt = GameState.Tiles[GameState.ToIndex((byte)nx, (byte)ny)];
-            if (tt == TileType.HighCover) best = Math.Max(best, 0.75);
-            else if (tt == TileType.LowCover) best = Math.Max(best, 0.50);
+            if (!st.InBounds(nx, ny)) continue;
+            int idx = GameState.ToIndex(nx, ny);
+            if (GameState.Tiles[idx] is TileType.LowCover or TileType.HighCover)
+            {
+                int cx = ag.X + dx, cy = ag.Y + dy;
+                int cidx = GameState.ToIndex(cx, cy);
+                if (!st.Occup.Test(cidx))
+                {
+                    return new AgentOrder
+                    {
+                        Move = new MoveAction(MoveType.Step, (byte)cx, (byte)cy),
+                        Combat = new CombatAction(CombatType.Hunker)
+                    };
+                }
+            }
         }
-        return best;
+
+        // W przeciwnym razie: shoot jeśli widzi
+        var stats = AgentUtils.Stats[GameState.AgentClasses[id]];
+        if (ag.Cooldown == 0)
+        {
+            for (int i = 0; i < GameState.MaxAgents; ++i)
+            {
+                ref readonly var trg = ref st.Agents[i];
+                if (!trg.Alive || trg.playerId == ag.playerId) continue;
+                if (GameState.Mdist(ag.X, ag.Y, trg.X, trg.Y) <= stats.OptimalRange * 2)
+                    return new AgentOrder
+                    {
+                        Move = new MoveAction(MoveType.Step, ag.X, ag.Y),
+                        Combat = new CombatAction(CombatType.Shoot, (ushort)i)
+                    };
+            }
+        }
+
+        // Albo rzuć bombę jeśli warto
+        if (ag.SplashBombs > 0)
+        {
+            for (int y = 0; y < st.H; y++)
+                for (int x = 0; x < st.W; x++)
+                {
+                    if (Math.Abs(x - ag.X) + Math.Abs(y - ag.Y) > 4) continue;
+                    int enemies = 0, allies = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int tx = x + dx, ty = y + dy;
+                            if (!st.InBounds(tx, ty)) continue;
+                            int aid = st.AgentAt((byte)tx, (byte)ty);
+                            if (aid == -1) continue;
+                            if (st.Agents[aid].playerId == ag.playerId) allies++; else enemies++;
+                        }
+                    if (enemies >= 2 && allies == 0)
+                        return new AgentOrder
+                        {
+                            Move = new MoveAction(MoveType.Step, ag.X, ag.Y),
+                            Combat = new CombatAction(CombatType.Throw, (ushort)x, (byte)y)
+                        };
+                }
+        }
+
+        return new AgentOrder
+        {
+            Move = new MoveAction(MoveType.Step, ag.X, ag.Y),
+            Combat = new CombatAction(CombatType.Hunker)
+        };
     }
 
-    // ─────────────────────────────────── Helper types ─────────────────────────────────────────
-    private readonly record struct Node(GameState State, TurnCommand First, double Score);
-
-    private sealed class NodeComparer : IComparer<Node>
+    private void CalculateCoveredTiles(GameState st)
     {
-        public static readonly NodeComparer Desc = new();
-        public int Compare(Node x, Node y) => y.Score.CompareTo(x.Score);
+        _coveredTiles = new HashSet<(int x, int y)>[GameState.MaxW * GameState.MaxH];
+        for (int i = 0; i < _coveredTiles.Length; i++)
+            _coveredTiles[i] = new HashSet<(int x, int y)>();
+
+        var tiles = GameState.Tiles;
+        // For each potential target tile t that is adjacent to at least one cover
+        for (int ty = 0; ty < st.H; ty++)
+            for (int tx = 0; tx < st.W; tx++)
+            {
+                int tIdx = GameState.ToIndex(tx, ty);
+                if (tiles[tIdx] != TileType.Empty) continue;
+
+                // Check if t has any orthogonal neighbor cover
+                bool hasCoverNeighbor = Helpers.Dir4.Any(d =>
+                {
+                    int cx = tx + d.x, cy = ty + d.y;
+                    return st.InBounds(cx, cy) &&
+                            (tiles[GameState.ToIndex(cx, cy)] == TileType.LowCover || tiles[GameState.ToIndex(cx, cy)] == TileType.HighCover);
+                });
+                if (!hasCoverNeighbor) continue;
+
+                // For each possible shooter position s
+                for (int sy = 0; sy < st.H; sy++)
+                    for (int sx = 0; sx < st.W; sx++)
+                    {
+                        int sIdx = GameState.ToIndex(sx, sy);
+                        if (tiles[sIdx] != TileType.Empty) continue;
+                        if (GameState.Cdist(tx, ty, sx, sy) <= 1 || GameState.Mdist(tx, ty, sx, sy) > 12) continue;
+
+                        double coverMod = 1.0;
+                        bool sameCover = false;
+                        int dx = tx - sx;
+                        int dy = ty - sy;
+
+                        // check x-direction cover
+                        if (Math.Abs(dx) > 1)
+                        {
+                            int adjX = -Math.Sign(dx);
+                            int cx = tx + adjX;
+                            int cy = ty;
+                            int cIdx = GameState.ToIndex(cx, cy);
+                            var cType = st.InBounds(cx, cy) ? tiles[cIdx] : TileType.Empty;
+                            if ((cType == TileType.LowCover || cType == TileType.HighCover) &&
+                                GameState.Cdist(cx, cy, sx, sy) > 1)
+                            {
+                                coverMod = Math.Min(coverMod, GameState.CoverModifier(cType));
+                                int sxCheck = sx - adjX;
+                                if (st.InBounds(sxCheck, sy) && GameState.ToIndex(sxCheck, sy) == cIdx)
+                                    sameCover = true;
+                            }
+                        }
+
+                        // check y-direction cover
+                        if (Math.Abs(dy) > 1)
+                        {
+                            int adjY = -Math.Sign(dy);
+                            int cx = tx;
+                            int cy = ty + adjY;
+                            int cIdx = GameState.ToIndex(cx, cy);
+                            var cType = st.InBounds(cx, cy) ? tiles[cIdx] : TileType.Empty;
+                            if ((cType == TileType.LowCover || cType == TileType.HighCover) &&
+                                GameState.Cdist(cx, cy, sx, sy) > 1)
+                            {
+                                coverMod = Math.Min(coverMod, GameState.CoverModifier(cType));
+                                int syCheck = sy - adjY;
+                                if (st.InBounds(sx, syCheck) && GameState.ToIndex(sx, syCheck) == cIdx)
+                                    sameCover = true;
+                            }
+                        }
+
+                        if (coverMod < 1.0 && !sameCover)
+                            _coveredTiles[tIdx].Add((sx, sy));
+                    }
+            }
+    }
+
+    private static double Evaluate(GameState gs, int myId)
+    {
+        // ── akumulatory HP / centroidy ────────────────────────────────
+        int   myHP = 0, enHP = 0, myAlive = 0, enAlive = 0;
+        double myCx = 0, myCy = 0, enCx = 0, enCy = 0;
+
+        foreach (var ag in gs.Agents)
+        {
+            if (!ag.Alive) continue;
+            int hp = 100 - ag.Wetness;
+
+            if (ag.playerId == myId)
+            {
+                myHP += hp;
+                myCx += ag.X; myCy += ag.Y;
+                myAlive++;
+            }
+            else
+            {
+                enHP += hp;
+                enCx += ag.X; enCy += ag.Y;
+                enAlive++;
+            }
+        }
+
+        // centroidy (jeśli ktoś żyje)
+        if (myAlive > 0) { myCx /= myAlive; myCy /= myAlive; }
+        if (enAlive > 0) { enCx /= enAlive; enCy /= enAlive; }
+
+        // ── odległość centroidów od środka mapy ───────────────────────
+        double midX = (gs.W - 1) / 2.0;
+        double midY = (gs.H - 1) / 2.0;
+
+        double myCentDist = Math.Abs(myCx - midX) + Math.Abs(myCy - midY);
+        double enCentDist = Math.Abs(enCx - midX) + Math.Abs(enCy - midY);
+
+        // ── rozproszenie (średni dystans do własnego centroidu) ───────
+        double myDisp = 0, enDisp = 0;
+        foreach (var ag in gs.Agents)
+        {
+            if (!ag.Alive) continue;
+            if (ag.playerId == myId)
+                myDisp += GameState.Mdist(ag.X, ag.Y, (int)Math.Round(myCx), (int)Math.Round(myCy));
+            else
+                enDisp += GameState.Mdist(ag.X, ag.Y, (int)Math.Round(enCx), (int)Math.Round(enCy));
+        }
+        if (myAlive > 0) myDisp /= myAlive;
+        if (enAlive > 0) enDisp /= enAlive;
+
+        // ── łączna wartość stanu ───────────────────────────────────────
+        double v = 0;
+        v += (myHP     - enHP)     * 1.0;   // przewaga HP
+        v += (myAlive  - enAlive)  * 50.0;  // zabicie wroga boli
+        v += (enCentDist - myCentDist) * 10.0; // bliżej środka = lepiej
+        v += (myDisp   - enDisp)   * 5.0;   // większe rozproszenie = trudniej nas zbombić
+
+        return v;
     }
 
 }

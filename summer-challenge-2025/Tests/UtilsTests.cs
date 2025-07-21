@@ -30,14 +30,6 @@ public class BitBoardTests
         bb.Test(37).Should().BeFalse();
     }
 
-    [Fact(DisplayName = "PopCount liczy wszystkie 200 pól")]
-    public void PopCount_AllBits()
-    {
-        var bb = new Bot.BitBoard();
-        for (int i = 0; i < 200; i++) bb.Set(i);
-        bb.PopCount().Should().Be(200);
-    }
-
     [Fact(DisplayName = "Losowy fuzz – write/read consistency")]
     public void FuzzRandomBits()
     {

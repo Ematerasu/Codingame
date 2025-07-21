@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -52,8 +53,6 @@ public sealed class GameState
     public readonly AgentState[] Agents;   // 10 × 32 B = 320 B
     public BitBoard Occup;        // 32 B – occupation (‑1 => bit=0)
 
-    public AgentState[] GetAgents(int playerId) => Array.FindAll(Agents, ag => ag.Alive && ag.playerId == playerId);
-
     public byte W { get; private set; }   // 12…20
     public byte H { get; private set; }   //  6…10
 
@@ -62,7 +61,6 @@ public sealed class GameState
     public bool IsGameOver;
     public int Winner = -1;
 
-    // ───────────────  Pool  ───────────────
     private static readonly ArrayPool<AgentState> _agentPool = ArrayPool<AgentState>.Shared;
 
     public GameState(byte width, byte height)
@@ -86,7 +84,8 @@ public sealed class GameState
     public GameState FastClone()
     {
         var buf = _agentPool.Rent(MaxAgents);
-        Array.Copy(Agents, buf, MaxAgents);
+        for (int i = 0; i < MaxAgents; ++i)
+            buf[i] = Agents[i];
         return new GameState(W, H, buf, Occup, Turn, Score0, Score1, IsGameOver, Winner);
     }
 
@@ -107,17 +106,12 @@ public sealed class GameState
     public bool InBounds(int x, int y) => (uint)x < W && (uint)y < H;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TileEmpty(int idx) => Tiles[idx] == TileType.Empty && !Occup.Test(idx);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Mdist(int x1, int y1, int x2, int y2)
         => Math.Abs(x1 - x2) + Math.Abs(y1 - y2);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Cdist(int x1, int y1, int x2, int y2)
         => Math.Max(Math.Abs(x1 - x2), Math.Abs(y1 - y2));
-
-    public ref AgentState GetAgent(int id) => ref Agents[id];
 
     public int AgentAt(byte x, byte y)
     {
@@ -155,58 +149,32 @@ public sealed class GameState
 
     public (byte x, byte y)? PathfindStep(int sx, int sy, int tx, int ty)
     {
-        int start = ToIndex(sx, sy);
-        int target = ToIndex(tx, ty);
-        Array.Clear(_visited, 0, Cells);
-        _bfsQueue.Clear();
+        if (!PathCache.Ready) return null;
 
-        _visited[start] = true;
-        _cameFrom[start] = -1;
-        _bfsQueue.Enqueue(start);
+        int from = ToIndex(sx, sy);
+        int to = ToIndex(tx, ty);
 
-        while (_bfsQueue.Count > 0)
-        {
-            int cur = _bfsQueue.Dequeue();
-            if (cur == target) break;
-            int cx = cur % MaxW;
-            int cy = cur / MaxW;
-            foreach (var (dx, dy) in new (int, int)[] { (1,0),(-1,0),(0,1),(0,-1) })
-            {
-                int nx = cx + dx, ny = cy + dy;
-                if (!InBounds(nx, ny)) continue;
-                int ni = ToIndex(nx, ny);
-                if (_visited[ni]) continue;
-                if (Tiles[ni] != TileType.Empty || Occup.Test(ni)) continue;
-                _visited[ni] = true;
-                _cameFrom[ni] = cur;
-                _bfsQueue.Enqueue(ni);
-            }
-        }
-
-        if (!_visited[target]) return null;
-        int step = target;
-        while (_cameFrom[step] != start)
-            step = _cameFrom[step];
-        return ((byte)(step % MaxW), (byte)(step / MaxW));
+        if (Tiles[to] != TileType.Empty) return null;
+        byte nx = PathCache.FirstStep[from, to, 0];
+        byte ny = PathCache.FirstStep[from, to, 1];
+        if (nx == 0 && ny == 0 && (sx != 0 || sy != 0)) return null; // nieosiągalny
+        return (nx, ny);
     }
     
-    public void ApplyInPlace(in TurnCommand p0Cmd, in TurnCommand p1Cmd)
+    public void ApplyInPlace(in TurnCommand p0Cmd, in TurnCommand p1Cmd, bool updateScore = true)
     {
         if (IsGameOver) return;
-        ResolveMoves(in p0Cmd, in p1Cmd);   // 1. MOVE
-        ResolveHunker(in p0Cmd, in p1Cmd);  // 2. HUNKER
-        ResolveCombat(in p0Cmd, in p1Cmd);  // 3. SHOOT / THROW
-        Cleanup();                          // 4. wetness / cd / turn++
+        ResolveMoves(in p0Cmd, in p1Cmd);
+        ResolveHunker(in p0Cmd, in p1Cmd);
+        ResolveCombat(in p0Cmd, in p1Cmd);
+        Cleanup();
 
-        if (!IsGameOver)
+        if (!IsGameOver && updateScore)
         {
             UpdateScores();
             CheckGameOver();
         }
     }
-
-    // ---------- 1) MOVE ----------
-    private static readonly (sbyte dx, sbyte dy)[] Dir4 = { (1, 0), (-1, 0), (0, 1), (0, -1) };
 
     private void ResolveMoves(in TurnCommand c0, in TurnCommand c1)
     {
@@ -314,7 +282,7 @@ public sealed class GameState
                 if (man == 1)
                 {
                     int idx = ToIndex(tx, ty);
-                    if (TileEmpty(idx))
+                    if (Tiles[idx] == TileType.Empty && !Occup.Test(idx))
                     {
                         destX[id] = (byte)tx;
                         destY[id] = (byte)ty;
@@ -335,7 +303,6 @@ public sealed class GameState
         }
     }
 
-    // ---------- 2) HUNKER ----------
     private void ResolveHunker(in TurnCommand c0, in TurnCommand c1)
     {
         for (int id = 0; id < MaxAgents; id++) Agents[id].Hunkering = false;
@@ -348,7 +315,6 @@ public sealed class GameState
         }
     }
 
-    // ---------- 3) COMBAT ----------
     private void ResolveCombat(in TurnCommand c0, in TurnCommand c1)
     {
         Span<CombatAction> acts = stackalloc CombatAction[MaxAgents];
@@ -456,7 +422,6 @@ public sealed class GameState
         th.SplashBombs--;
     }
 
-    // ---------- 4) CLEANUP ----------
     private void Cleanup()
     {
         for (int id = 0; id < MaxAgents; ++id)
@@ -473,29 +438,61 @@ public sealed class GameState
         ++Turn;
     }
 
-    // ---------- 5) SCORE ----------
     private void UpdateScores()
     {
-        int diff = 0;
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < W; ++x)
+        int minX0 = MaxW, maxX0 = -1, minY0 = MaxH, maxY0 = -1;
+        int minX1 = MaxW, maxX1 = -1, minY1 = MaxH, maxY1 = -1;
+
+        for (int id = 0; id < MaxAgents; ++id)
+        {
+            ref readonly var ag = ref Agents[id];
+            if (!ag.Alive) continue;
+
+            if (ag.playerId == 0)
             {
-                int best0 = int.MaxValue, best1 = int.MaxValue; int idx = ToIndex(x, y);
-                if (Tiles[idx] != TileType.Empty) continue;  // cover nie liczy się do terenu
-                for (int id = 0; id < MaxAgents; ++id)
-                {
-                    ref readonly var ag = ref Agents[id];
-                    if (!ag.Alive) continue;
-                    int d = Math.Abs(ag.X - x) + Math.Abs(ag.Y - y);
-                    if (ag.Wetness >= 50) d <<= 1;
-                    if (ag.playerId == 0) best0 = Math.Min(best0, d); else best1 = Math.Min(best1, d);
-                }
-                if (best0 < best1) ++diff; else if (best1 < best0) --diff;
+                minX0 = Math.Min(minX0, ag.X);
+                maxX0 = Math.Max(maxX0, ag.X);
+                minY0 = Math.Min(minY0, ag.Y);
+                maxY0 = Math.Max(maxY0, ag.Y);
             }
-        if (diff > 0) Score0 += diff; else if (diff < 0) Score1 -= diff;
+            else
+            {
+                minX1 = Math.Min(minX1, ag.X);
+                maxX1 = Math.Max(maxX1, ag.X);
+                minY1 = Math.Min(minY1, ag.Y);
+                maxY1 = Math.Max(maxY1, ag.Y);
+            }
+        }
+
+        int diff = 0;
+
+        // Sprawdź tylko pola które mogły być "garantowane", ale mimo wszystko sprawdź d0 i d1
+        for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+        {
+            // Optional: early skip jeśli poza bboxami obu stron
+            int d0 = int.MaxValue, d1 = int.MaxValue;
+            for (int id = 0; id < MaxAgents; ++id)
+            {
+                ref readonly var ag = ref Agents[id];
+                if (!ag.Alive) continue;
+
+                int d = Math.Abs(ag.X - x) + Math.Abs(ag.Y - y);
+                if (ag.Wetness >= 50) d <<= 1;
+
+                if (ag.playerId == 0) d0 = Math.Min(d0, d);
+                else d1 = Math.Min(d1, d);
+            }
+
+            if (d0 < d1) diff++;
+            else if (d1 < d0) diff--;
+            // w przeciwnym razie nikt nie kontroluje
+        }
+
+        if (diff > 0) Score0 += diff;
+        else if (diff < 0) Score1 -= diff;
     }
 
-    // ---------- 6) GAME‑OVER ----------
     private void CheckGameOver()
     {
         int lead = Score0 - Score1;
@@ -523,11 +520,10 @@ public sealed class GameState
         ref readonly var ag = ref Agents[agentId];
         if (!ag.Alive) return 0;
 
-        // ─── 1.  MOVE kandydaci (Stay + 4 ortogonalne puste) ────────────────
         Span<MoveAction> moves = stackalloc MoveAction[5];
         int mCnt = 0;
         moves[mCnt++] = new MoveAction(MoveType.Step, ag.X, ag.Y);  // Stay
-        foreach (var (dx, dy) in Dir4)
+        foreach (var (dx, dy) in Helpers.Dir4)
         {
             byte nx = (byte)(ag.X + dx);
             byte ny = (byte)(ag.Y + dy);
@@ -598,50 +594,70 @@ public sealed class GameState
             _ => 1.0
         };
 
-    public string DebugString()
+}
+
+public static class PathCache
+{
+    public static readonly byte[,,] FirstStep = new byte[GameState.Cells, GameState.Cells, 2];
+    public static bool Ready;
+
+    public static void Precompute(GameState st)
     {
-        var sb = new System.Text.StringBuilder(2048);
-        sb.AppendLine($"[GameState] Turn={Turn} | W={W} H={H} | Score: P0={Score0}, P1={Score1} | Over={IsGameOver} Winner={Winner}");
-
-        sb.AppendLine("Tiles:");
-        for (int y = 0; y < H; y++)
-        {
-            for (int x = 0; x < W; x++)
+        for (int sy = 0; sy < st.H; sy++)
+            for (int sx = 0; sx < st.W; sx++)
             {
-                var tile = Tiles[ToIndex(x, y)];
-                char c = tile switch
+                int from = GameState.ToIndex(sx, sy);
+                if (GameState.Tiles[from] != TileType.Empty) continue;
+
+                Span<bool> visited = stackalloc bool[GameState.Cells];
+                Span<int> parent = stackalloc int[GameState.Cells];
+
+                visited.Clear();
+                for (int i = 0; i < GameState.Cells; i++) parent[i] = -1;
+
+                Span<int> queue = stackalloc int[GameState.Cells];
+                int qHead = 0, qTail = 0;
+
+                visited[from] = true;
+                queue[qTail++] = from;
+
+                while (qHead < qTail)
                 {
-                    TileType.Empty => '.',
-                    TileType.LowCover => 'L',
-                    TileType.HighCover => 'H',
-                    _ => '?'
-                };
-                sb.Append(c);
+                    int cur = queue[qHead++];
+                    int cx = cur % GameState.MaxW, cy = cur / GameState.MaxW;
+
+                    foreach (var (dx, dy) in Helpers.Dir4)
+                    {
+                        int nx = cx + dx, ny = cy + dy;
+                        if (!st.InBounds(nx, ny)) continue;
+                        int ni = GameState.ToIndex(nx, ny);
+                        if (visited[ni] || GameState.Tiles[ni] != TileType.Empty) continue;
+
+                        visited[ni] = true;
+                        parent[ni] = cur;
+                        queue[qTail++] = ni;
+                    }
+                }
+
+                for (int ty = 0; ty < st.H; ty++)
+                    for (int tx = 0; tx < st.W; tx++)
+                    {
+                        int to = GameState.ToIndex(tx, ty);
+                        if (!visited[to]) continue;
+
+                        // Odtwórz pierwszy krok z parent[]
+                        int step = to;
+                        while (parent[step] != from && parent[step] != -1)
+                            step = parent[step];
+
+                        if (step == from) continue;
+
+                        PathCache.FirstStep[from, to, 0] = (byte)(step % GameState.MaxW);
+                        PathCache.FirstStep[from, to, 1] = (byte)(step / GameState.MaxW);
+                    }
             }
-            sb.AppendLine();
-        }
 
-        sb.AppendLine("Agents:");
-        for (int id = 0; id < MaxAgents; id++)
-        {
-            ref readonly var ag = ref Agents[id];
-            if (!ag.Alive) continue;
-            var cls = AgentClasses[id];
-            sb.AppendLine($"  [{id}] Player={ag.playerId} Class={cls} Pos=({ag.X},{ag.Y}) CD={ag.Cooldown} Wet={ag.Wetness} Bombs={ag.SplashBombs} Hunkering={ag.Hunkering}");
-        }
-
-        sb.AppendLine("Occupancy:");
-        for (int y = 0; y < H; y++)
-        {
-            for (int x = 0; x < W; x++)
-            {
-                int idx = ToIndex(x, y);
-                sb.Append(Occup.Test(idx) ? '#' : '.');
-            }
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
+        Ready = true;
     }
 }
 

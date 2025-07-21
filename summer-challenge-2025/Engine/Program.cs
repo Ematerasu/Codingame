@@ -12,14 +12,14 @@ class Program
 
         var runner = new Runner(
             () => new CoverBot(),
-            () => new Mikasa(),
+            () => new Esdeath(),
             new SimulationParams
             {
                 Seed = seed,
-                Games = 100,
+                Games = 1,
                 //Visualizer = null,
                 //Visualizer = new Visualizer(),
-                //Visualizer = new PngVisualizer(seed.ToString()),
+                Visualizer = new PngVisualizer(seed.ToString()),
             }
         );
         runner.ProfiledRun();

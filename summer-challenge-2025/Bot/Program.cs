@@ -14,7 +14,7 @@ class Player
     {
 
         BotSetup.Apply();
-        var bot  = new Mikasa();
+        var bot  = new Esdeath();
         int myId = int.Parse(Console.ReadLine()!);
         bot.Initialize(myId);
         while (true)

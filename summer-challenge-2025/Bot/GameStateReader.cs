@@ -37,7 +37,6 @@ public static class GameStateReader
         return gs;
     }
 
-    //──────────────────────── init helpers ──────────────────────────────
     private static void ReadInit(TextReader input)
     {
         int agentDataCount  = int.Parse(input.ReadLine()!);
@@ -47,7 +46,7 @@ public static class GameStateReader
         {
             var t = input.ReadLine()!.Split(' ');
             tmpAgents[i] = (
-                int.Parse(t[0]) - 1,          // 1-based → 0-based
+                int.Parse(t[0]) - 1,
                 int.Parse(t[1]),
                 int.Parse(t[2]),
                 int.Parse(t[3]),
@@ -81,7 +80,8 @@ public static class GameStateReader
                 GameState.Tiles[GameState.ToIndex((byte)x,(byte)y)] = (TileType)tileType;
             }
         }
-
+        if (!PathCache.Ready)
+            PathCache.Precompute(gs);
         _baseState = gs;
         _initDone  = true;
     }

@@ -166,22 +166,21 @@ public sealed class DevelopmentPhase : IGamePhase
         return false;
     }
     
-    static readonly (int dx,int dy)[] Dir4 = { (1,0),(-1,0),(0,1),(0,-1) };
 
     private static (byte x, byte y)? NextStep(GameState st,
                                             byte sx, byte sy,
                                             int  tx,  int  ty,
                                             HashSet<(byte,byte)> reserved)
     {
-        if (sx == tx && sy == ty) return null;              // już stoimy
+        if (sx == tx && sy == ty) return null;
 
         int W = st.W, H = st.H;
         bool[] vis = new bool[W * H];
         var q = new Queue<(byte x, byte y, byte fx, byte fy)>();
 
-        Vis(sx, sy);    // startowe pole
+        Vis(sx, sy);
 
-        foreach (var (dx,dy) in Dir4)                       // inicjalizuj sąsiadów
+        foreach (var (dx,dy) in Helpers.Dir4)
             TryPush((byte)(sx+dx), (byte)(sy+dy), (byte)(sx+dx), (byte)(sy+dy));
 
         while (q.Count != 0)
@@ -189,12 +188,11 @@ public sealed class DevelopmentPhase : IGamePhase
             var (x,y,fx,fy) = q.Dequeue();
             if (x == tx && y == ty) return (fx,fy);
 
-            foreach (var (dx,dy) in Dir4)
+            foreach (var (dx,dy) in Helpers.Dir4)
                 TryPush((byte)(x+dx), (byte)(y+dy), fx, fy);
         }
-        return null;                                        // brak ścieżki
+        return null;
 
-        /* ------------- lokalne pomocnicze ------------------------------ */
         void Vis(int x,int y) => vis[y*W + x] = true;
         bool IsVis(int x,int y) => vis[y*W + x];
 
@@ -253,7 +251,7 @@ public static class EnemyPlanRecognizer
                 $" bottom={bottom}({pctBottom:P0})"
             );
         }
-        const double RUSH_THRESH   = 0.30;
+        const double RUSH_THRESH   = 0.25;
         const double TURTLE_THRESH = 0.10;
         // 3) progowanie na podstawie procentów
         // Rush = >= 60% wrogów w połowie mapy (przed linią)
@@ -265,7 +263,7 @@ public static class EnemyPlanRecognizer
         }
 
         // Centralny push = >= 60% w centrum
-        if (pctCenter >= 0.6)
+        if (pctCenter >= 0.5)
         {
             if (Config.DebugEnabled)
                 Console.Error.WriteLine("[DEBUG] EnemyPlan: CentralPush (center ≥ 60%)");

@@ -52,7 +52,7 @@ public static class Profiler
             Console.WriteLine($"[Profiler] {label} took {elapsed * 1000.0 / Stopwatch.Frequency} ms");
         }
         stat.Add(elapsed);
-        return result;
+        return result; 
     }
 
     public static void Report()

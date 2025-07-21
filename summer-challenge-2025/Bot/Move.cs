@@ -68,7 +68,6 @@ public struct TurnCommand
         ActiveMask |= 1UL << id;
     }
 
-    /// <summary>Fast enumeration, only for active agents</summary>
     public readonly IEnumerable<int> EnumerateActive()
     {
         ulong mask = ActiveMask;
@@ -76,7 +75,7 @@ public struct TurnCommand
         {
             int id = BitOperations.TrailingZeroCount(mask);
             yield return id;
-            mask &= mask - 1;    // clear lowest bit
+            mask &= mask - 1;
         }
     }
     

@@ -83,20 +83,6 @@ public sealed class OpeningPhase : IGamePhase
             _plans[id] = new AgentPlan(q, GameState.AgentClasses[id]);
         }
 
-        if (Config.DebugEnabled)
-            Console.Error.WriteLine(_map.FormatSniperSpots(15));
-
-        if (Config.DebugEnabled)
-        {
-            var sb = new StringBuilder("Plans:");
-            foreach (var (id, plan) in _plans)
-            {
-                var tgt = plan.PeekTarget();
-                int dist = GameState.Mdist(st.Agents[id].X, st.Agents[id].Y, tgt.x, tgt.y);
-                sb.Append($" [{id}:{plan.Class}->{tgt.x},{tgt.y}|d{dist}]");
-            }
-            Console.Error.WriteLine(sb.ToString());
-        }
     }
 
     private void CalculateCoveredTiles(GameState st)
@@ -128,7 +114,7 @@ public sealed class OpeningPhase : IGamePhase
                     {
                         int sIdx = GameState.ToIndex(sx, sy);
                         if (tiles[sIdx] != TileType.Empty) continue;
-                        if (GameState.Cdist(tx, ty, sx, sy) <= 1) continue;
+                        if (GameState.Cdist(tx, ty, sx, sy) <= 1 || GameState.Mdist(tx, ty, sx, sy) > 12) continue;
 
                         double coverMod = 1.0;
                         bool sameCover = false;
@@ -229,14 +215,14 @@ public sealed class MapAnalyzer
             enemyPos.Average(p => (double)p.y)
         );
 
-        foreach (var pos in EmptyTilesAdjacentToCover(tiles, w, h))
+        foreach (var pos in EmptyTilesAdjacentToCover(tiles, st))
         {
             int rawScore = 0;
 
             foreach (var dir in Helpers.Dir4)
             {
                 int cx = pos.x + dir.x, cy = pos.y + dir.y;
-                if (!InBounds(cx, cy, w, h)) continue;
+                if (!st.InBounds(cx, cy)) continue;
 
                 var cover = tiles[GameState.ToIndex((byte)cx, (byte)cy)];
                 if (cover is not (TileType.LowCover or TileType.HighCover)) continue;
@@ -250,7 +236,7 @@ public sealed class MapAnalyzer
                 {
                     int sx = pos.x + dir.x * (step + 1);
                     int sy = pos.y + dir.y * (step + 1);
-                    if (!InBounds(sx, sy, w, h)) break;
+                    if (!st.InBounds(sx, sy)) break;
 
                     var tile = tiles[GameState.ToIndex(sx, sy)];
                     if (tile is TileType.LowCover or TileType.HighCover)
@@ -274,30 +260,21 @@ public sealed class MapAnalyzer
         SniperSpots.Sort((a, b) => b.score != a.score ? b.score.CompareTo(a.score) : (a.x + a.y).CompareTo(b.x + b.y));
     }
 
-    public string FormatSniperSpots(int top = 10)
-        => string.Join(" ", SniperSpots.Take(top).Select(p => $"({p.x},{p.y}:{p.score})"));
-
-    private static IEnumerable<(int x, int y)> EmptyTilesAdjacentToCover(TileType[] tiles, int w, int h)
+    private static IEnumerable<(int x, int y)> EmptyTilesAdjacentToCover(TileType[] tiles, GameState st)
     {
-        foreach (var (x, y) in GridIndices(w, h))
-        {
-            if (tiles[GameState.ToIndex(x, y)] != TileType.Empty) continue;
-            foreach (var dir in Helpers.Dir4)
+        for (int y = 0; y < st.H; y++)
+            for (int x = 0; x < st.W; x++)
             {
-                int nx = x + dir.x, ny = y + dir.y;
-                if (!InBounds(nx, ny, w, h)) continue;
-                if (tiles[GameState.ToIndex(nx, ny)] is TileType.LowCover or TileType.HighCover)
-                { yield return (x, y); break; }
+                if (tiles[GameState.ToIndex(x, y)] != TileType.Empty) continue;
+                foreach (var dir in Helpers.Dir4)
+                {
+                    int nx = x + dir.x, ny = y + dir.y;
+                    if (!st.InBounds(nx, ny)) continue;
+                    if (tiles[GameState.ToIndex(nx, ny)] is TileType.LowCover or TileType.HighCover)
+                    { yield return (x, y); break; }
+                }
             }
-        }
     }
-
-    private static IEnumerable<(int x, int y)> GridIndices(int w, int h)
-    {
-        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) yield return (x, y);
-    }
-    private static bool InBounds(int x, int y, int w, int h)
-        => (uint)x < w && (uint)y < h;
 }
 
 public sealed class PathPlanner
@@ -375,26 +352,6 @@ public sealed class PathPlanner
         return path;
     }
 
-    // główna metoda budująca kolejkę (1-elementową) targetu
-    public Queue<(byte x, byte y)> BuildPath(int id, AgentClass cls)
-    {
-        var me = st.Agents[id];
-        (int tx, int ty) target = cls switch
-        {
-            AgentClass.Sniper => BestSniperSpotForRow(_assaultRow, me),
-            AgentClass.Bomber => (st.W / 2, _assaultRow),
-            _ => AssaultTarget(),   // Gunner / Assault / Berserker
-        };
-
-        var q = new Queue<(byte, byte)>();
-        q.Enqueue(((byte)target.tx, (byte)target.ty));
-        return q;
-    }
-
-    /* ─── logika drużynowa ───────────────────────────────────────────────── */
-
-    // Docelowe pole dla Assault-Squadu – pusty tile przy coverze,
-    // w połowie planszy, po naszej stronie.
     public (int tx, int ty) AssaultTarget()
     {
         int centerX = st.W / 2 - _spawnSide;
@@ -425,7 +382,6 @@ public sealed class PathPlanner
         return (centerX, _assaultRow);        // fallback – nigdy nie powinno się zdarzyć
     }
 
-    // Najlepsza pozycja snajpera, ALE preferujemy wiersz assaultRow
     public (int tx, int ty) BestSniperSpotForRow(int row, AgentState me)
     {
         var sameRow = map.SniperSpots.Where(p => (p.y == row) || (p.y == row + 1) || (p.y == row - 1)).ToList();
@@ -437,8 +393,6 @@ public sealed class PathPlanner
                     .First();
     }
 
-    // heurystyka wyboru assaultRow: najwięcej coverów w linii poziomej,
-    // ale tylko w „naszej połowie” planszy (x ≤ W/2  lub  ≥ W/2)
     private int PickAssaultRow()
     {
         int w = st.W, h = st.H, half = w / 2;
@@ -467,10 +421,6 @@ public sealed class AgentPlan
     private readonly Queue<(byte x, byte y)> _path;
     public AgentClass Class { get; }
     public AgentTask? Task { get; set; }
-
-    public bool HasPendingTarget => _path.Count > 0;
-    public (byte x, byte y)? PeekTargetOrNull()
-        => _path.Count > 0 ? _path.Peek() : null;
 
     public AgentPlan(Queue<(byte, byte)> path, AgentClass cls, AgentTask? task = null)
     { _path = path; Class = cls; Task = task; }
@@ -526,9 +476,6 @@ public sealed class AgentPlan
         if (st.AgentAt(x, y) != -1) return new MoveAction(MoveType.Step, me.X, me.Y);
         return new MoveAction(MoveType.Step, x, y);
     }
-    public (byte x, byte y) PeekTarget()
-        => _path.Count > 0 ? _path.Peek() : ((byte)0, (byte)0);
-
     public void OverrideTarget(int x, int y)
     {
         _path.Clear();
@@ -593,29 +540,6 @@ public static class Helpers
             cmd.SetCombat(id, new CombatAction(CombatType.Throw, (ushort)bestX, (byte)bestY));
     }
 
-    public static bool TryShootAt(GameState st, int id, int targetId, ref TurnCommand cmd)
-    {
-        ref readonly var me = ref st.Agents[id];
-        if (me.Cooldown > 0) return false;
-
-        ref readonly var trg = ref st.Agents[targetId];
-        if (!trg.Alive) return false;
-
-        int rangeMax = AgentUtils.Stats[GameState.AgentClasses[id]].OptimalRange * 2;
-        if (GameState.Mdist(me.X, me.Y, trg.X, trg.Y) > rangeMax) return false;
-
-        /* ► oszacuj faktyczny dmg po coverze */
-        double cover = GetCoverModifier(id, targetId, st);     // 1.0 / 0.5 / 0.25
-        int soak = AgentUtils.Stats[GameState.AgentClasses[id]].SoakingPower;
-        double dmg = soak * cover;
-
-        const int MinWetness = 12;                              // heurystyczny próg
-        if (dmg < MinWetness) return false;                          // strata czasu
-
-        cmd.SetCombat(id, new CombatAction(CombatType.Shoot, (ushort)targetId));
-        return true;
-    }
-
     public static double GetCoverModifier(int shooterId, int targetId, GameState st)
     {
         ref readonly var sh = ref st.Agents[shooterId];
@@ -647,16 +571,4 @@ public static class Helpers
         return best;
     }
     
-    public static bool HasCoverNearby(GameState st, int x, int y)
-    {
-        foreach (var (dx, dy) in Dir4)
-        {
-            int nx = x + dx, ny = y + dy;
-            if (!st.InBounds(nx, ny)) continue;
-            var tile = GameState.Tiles[GameState.ToIndex(nx, ny)];
-            if (tile == TileType.LowCover || tile == TileType.HighCover)
-                return true;
-        }
-        return false;
-    }
 }

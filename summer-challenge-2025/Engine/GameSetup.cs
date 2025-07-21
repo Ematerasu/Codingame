@@ -47,8 +47,9 @@ public static class GameSetup
                 }
             }
         }
-
-        // ── 3. Spawny po lewej krawędzi ─────────────────────────────────────
+        if (!PathCache.Ready)
+            PathCache.Precompute(gs);
+        // ── 3. Spawny po lewej krawęd zi ─────────────────────────────────────
         List<byte> spawnRows = new();
         for (byte y = 0; y < h; ++y) spawnRows.Add(y);
         rng.Shuffle(spawnRows);

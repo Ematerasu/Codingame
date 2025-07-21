@@ -3,6 +3,7 @@
 
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -81,42 +82,9 @@ public static class AgentUtils
         }
     }
 
-    /*──────────────────────────  API  ──────────────────────────*/
-    /// <summary>
-    ///  Zamiana czterech liczb z inicjalizacji na <see cref="AgentClass"/>.
-    ///  Jeśli nie pasuje – zwraca <see cref="AgentClass.Gunner"/>.
-    /// </summary>
     public static AgentClass GuessClass(int cd, int range, int power, int bombs)
         => _reverse.TryGetValue((cd, range, power, bombs), out var cls) ? cls : AgentClass.Gunner;
 
-    /// <summary>
-    ///  Szybka ocena, czy <paramref name="target"/> jest „łatwym celem” w starciu z <paramref name="me"/>.
-    /// </summary>
-    public static bool IsSoftTarget(in AgentState target, in AgentState me, in AgentStats myStats, in AgentStats targetStats)
-    {
-        if (!target.Alive || target.playerId == me.playerId) return false;
-        bool weakerDmg = targetStats.SoakingPower < myStats.SoakingPower;
-        bool longerCd = targetStats.ShootCooldown > myStats.ShootCooldown;
-        bool lowHP = target.Wetness > 60;
-        return weakerDmg || longerCd || lowHP;
-    }
-
-    /// <summary>
-    ///  Minimalna Manhattan‑distance do dowolnego przeciwnika spełniającego <paramref name="predicate"/>.
-    ///  Zwraca <c>int.MaxValue</c>, jeśli brak takiego.
-    /// </summary>
-    public static int DistanceToClosestEnemy(GameState gs, int myId, Func<int, bool> predicate)
-    {
-        ref readonly var me = ref gs.Agents[myId];
-        int best = int.MaxValue;
-        for (int i = 0; i < GameState.MaxAgents; ++i)
-        {
-            if (!predicate(i)) continue;
-            int d = GameState.Mdist(me.X, me.Y, gs.Agents[i].X, gs.Agents[i].Y);
-            if (d < best) best = d;
-        }
-        return best;
-    }
 }
 
 public struct BitBoard
@@ -133,55 +101,7 @@ public struct BitBoard
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Test(int idx)
         => (Unsafe.Add(ref A, idx >> 6) & (1UL << (idx & 63))) != 0;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int PopCount()
-        => BitOperations.PopCount(A)
-        + BitOperations.PopCount(B)
-        + BitOperations.PopCount(C)
-        + BitOperations.PopCount(D);
 }
-
-// public static class GameStateExtensions
-// {
-//     public static GameStateBit ToBitState(this GameState source)
-//     {
-//         TileType[] paddedTiles = new TileType[GameStateBit.Cells];
-//         for (int y = 0; y < source.Height; y++)
-//         {
-//             for (int x = 0; x < source.Width; x++)
-//             {
-//                 int srcIdx = x + y * source.Width;
-//                 int dstIdx = GameStateBit.ToIndex(x, y);
-//                 paddedTiles[dstIdx] = source.Tiles[srcIdx];
-//             }
-//         }
-
-//         GameStateBit.InitStatic(paddedTiles, source.Classes);
-
-//         var bitState = new GameStateBit((byte)source.Width, (byte)source.Height)
-//         {
-//             Turn = source.Turn,
-//             Score0 = source.Score0,
-//             Score1 = source.Score1,
-//             IsGameOver = source.IsGameOver,
-//             Winner = source.Winner
-//         };
-
-//         for (int id = 0; id < GameState.MaxAgents; id++)
-//         {
-//             bitState.Agents[id] = source.Agents[id];
-
-//             if (source.Agents[id].Alive)
-//             {
-//                 int idx = GameStateBit.ToIndex(source.Agents[id].X, source.Agents[id].Y);
-//                 bitState.Occup.Set(idx);
-//             }
-//         }
-
-//         return bitState;
-//     }
-// }
 
 // ===== Move.cs =====
 
@@ -249,7 +169,6 @@ public struct TurnCommand
         ActiveMask |= 1UL << id;
     }
 
-    /// <summary>Fast enumeration, only for active agents</summary>
     public readonly IEnumerable<int> EnumerateActive()
     {
         ulong mask = ActiveMask;
@@ -257,7 +176,7 @@ public struct TurnCommand
         {
             int id = BitOperations.TrailingZeroCount(mask);
             yield return id;
-            mask &= mask - 1;    // clear lowest bit
+            mask &= mask - 1;
         }
     }
     
@@ -348,8 +267,6 @@ public sealed class GameState
     public readonly AgentState[] Agents;   // 10 × 32 B = 320 B
     public BitBoard Occup;        // 32 B – occupation (‑1 => bit=0)
 
-    public AgentState[] GetAgents(int playerId) => Array.FindAll(Agents, ag => ag.Alive && ag.playerId == playerId);
-
     public byte W { get; private set; }   // 12…20
     public byte H { get; private set; }   //  6…10
 
@@ -358,7 +275,6 @@ public sealed class GameState
     public bool IsGameOver;
     public int Winner = -1;
 
-    // ───────────────  Pool  ───────────────
     private static readonly ArrayPool<AgentState> _agentPool = ArrayPool<AgentState>.Shared;
 
     public GameState(byte width, byte height)
@@ -382,11 +298,10 @@ public sealed class GameState
     public GameState FastClone()
     {
         var buf = _agentPool.Rent(MaxAgents);
-        Array.Copy(Agents, buf, MaxAgents);
+        for (int i = 0; i < MaxAgents; ++i)
+            buf[i] = Agents[i];
         return new GameState(W, H, buf, Occup, Turn, Score0, Score1, IsGameOver, Winner);
     }
-
-    public void Dispose() => _agentPool.Return(Agents);
 
     public void ClearAgents()
     {
@@ -403,17 +318,12 @@ public sealed class GameState
     public bool InBounds(int x, int y) => (uint)x < W && (uint)y < H;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TileEmpty(int idx) => Tiles[idx] == TileType.Empty && !Occup.Test(idx);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Mdist(int x1, int y1, int x2, int y2)
         => Math.Abs(x1 - x2) + Math.Abs(y1 - y2);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Cdist(int x1, int y1, int x2, int y2)
         => Math.Max(Math.Abs(x1 - x2), Math.Abs(y1 - y2));
-
-    public ref AgentState GetAgent(int id) => ref Agents[id];
 
     public int AgentAt(byte x, byte y)
     {
@@ -451,58 +361,32 @@ public sealed class GameState
 
     public (byte x, byte y)? PathfindStep(int sx, int sy, int tx, int ty)
     {
-        int start = ToIndex(sx, sy);
-        int target = ToIndex(tx, ty);
-        Array.Clear(_visited, 0, Cells);
-        _bfsQueue.Clear();
+        if (!PathCache.Ready) return null;
 
-        _visited[start] = true;
-        _cameFrom[start] = -1;
-        _bfsQueue.Enqueue(start);
+        int from = ToIndex(sx, sy);
+        int to = ToIndex(tx, ty);
 
-        while (_bfsQueue.Count > 0)
-        {
-            int cur = _bfsQueue.Dequeue();
-            if (cur == target) break;
-            int cx = cur % MaxW;
-            int cy = cur / MaxW;
-            foreach (var (dx, dy) in new (int, int)[] { (1,0),(-1,0),(0,1),(0,-1) })
-            {
-                int nx = cx + dx, ny = cy + dy;
-                if (!InBounds(nx, ny)) continue;
-                int ni = ToIndex(nx, ny);
-                if (_visited[ni]) continue;
-                if (Tiles[ni] != TileType.Empty || Occup.Test(ni)) continue;
-                _visited[ni] = true;
-                _cameFrom[ni] = cur;
-                _bfsQueue.Enqueue(ni);
-            }
-        }
-
-        if (!_visited[target]) return null;
-        int step = target;
-        while (_cameFrom[step] != start)
-            step = _cameFrom[step];
-        return ((byte)(step % MaxW), (byte)(step / MaxW));
+        if (Tiles[to] != TileType.Empty) return null;
+        byte nx = PathCache.FirstStep[from, to, 0];
+        byte ny = PathCache.FirstStep[from, to, 1];
+        if (nx == 0 && ny == 0 && (sx != 0 || sy != 0)) return null; // nieosiągalny
+        return (nx, ny);
     }
     
-    public void ApplyInPlace(in TurnCommand p0Cmd, in TurnCommand p1Cmd)
+    public void ApplyInPlace(in TurnCommand p0Cmd, in TurnCommand p1Cmd, bool updateScore = true)
     {
         if (IsGameOver) return;
-        ResolveMoves(in p0Cmd, in p1Cmd);   // 1. MOVE
-        ResolveHunker(in p0Cmd, in p1Cmd);  // 2. HUNKER
-        ResolveCombat(in p0Cmd, in p1Cmd);  // 3. SHOOT / THROW
-        Cleanup();                          // 4. wetness / cd / turn++
+        ResolveMoves(in p0Cmd, in p1Cmd);
+        ResolveHunker(in p0Cmd, in p1Cmd);
+        ResolveCombat(in p0Cmd, in p1Cmd);
+        Cleanup();
 
-        if (!IsGameOver)
+        if (!IsGameOver && updateScore)
         {
             UpdateScores();
             CheckGameOver();
         }
     }
-
-    // ---------- 1) MOVE ----------
-    private static readonly (sbyte dx, sbyte dy)[] Dir4 = { (1, 0), (-1, 0), (0, 1), (0, -1) };
 
     private void ResolveMoves(in TurnCommand c0, in TurnCommand c1)
     {
@@ -610,7 +494,7 @@ public sealed class GameState
                 if (man == 1)
                 {
                     int idx = ToIndex(tx, ty);
-                    if (TileEmpty(idx))
+                    if (Tiles[idx] == TileType.Empty && !Occup.Test(idx))
                     {
                         destX[id] = (byte)tx;
                         destY[id] = (byte)ty;
@@ -631,7 +515,6 @@ public sealed class GameState
         }
     }
 
-    // ---------- 2) HUNKER ----------
     private void ResolveHunker(in TurnCommand c0, in TurnCommand c1)
     {
         for (int id = 0; id < MaxAgents; id++) Agents[id].Hunkering = false;
@@ -644,7 +527,6 @@ public sealed class GameState
         }
     }
 
-    // ---------- 3) COMBAT ----------
     private void ResolveCombat(in TurnCommand c0, in TurnCommand c1)
     {
         Span<CombatAction> acts = stackalloc CombatAction[MaxAgents];
@@ -752,7 +634,6 @@ public sealed class GameState
         th.SplashBombs--;
     }
 
-    // ---------- 4) CLEANUP ----------
     private void Cleanup()
     {
         for (int id = 0; id < MaxAgents; ++id)
@@ -769,29 +650,61 @@ public sealed class GameState
         ++Turn;
     }
 
-    // ---------- 5) SCORE ----------
     private void UpdateScores()
     {
-        int diff = 0;
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < W; ++x)
+        int minX0 = MaxW, maxX0 = -1, minY0 = MaxH, maxY0 = -1;
+        int minX1 = MaxW, maxX1 = -1, minY1 = MaxH, maxY1 = -1;
+
+        for (int id = 0; id < MaxAgents; ++id)
+        {
+            ref readonly var ag = ref Agents[id];
+            if (!ag.Alive) continue;
+
+            if (ag.playerId == 0)
             {
-                int best0 = int.MaxValue, best1 = int.MaxValue; int idx = ToIndex(x, y);
-                if (Tiles[idx] != TileType.Empty) continue;  // cover nie liczy się do terenu
-                for (int id = 0; id < MaxAgents; ++id)
-                {
-                    ref readonly var ag = ref Agents[id];
-                    if (!ag.Alive) continue;
-                    int d = Math.Abs(ag.X - x) + Math.Abs(ag.Y - y);
-                    if (ag.Wetness >= 50) d <<= 1;
-                    if (ag.playerId == 0) best0 = Math.Min(best0, d); else best1 = Math.Min(best1, d);
-                }
-                if (best0 < best1) ++diff; else if (best1 < best0) --diff;
+                minX0 = Math.Min(minX0, ag.X);
+                maxX0 = Math.Max(maxX0, ag.X);
+                minY0 = Math.Min(minY0, ag.Y);
+                maxY0 = Math.Max(maxY0, ag.Y);
             }
-        if (diff > 0) Score0 += diff; else if (diff < 0) Score1 -= diff;
+            else
+            {
+                minX1 = Math.Min(minX1, ag.X);
+                maxX1 = Math.Max(maxX1, ag.X);
+                minY1 = Math.Min(minY1, ag.Y);
+                maxY1 = Math.Max(maxY1, ag.Y);
+            }
+        }
+
+        int diff = 0;
+
+        // Sprawdź tylko pola które mogły być "garantowane", ale mimo wszystko sprawdź d0 i d1
+        for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+        {
+            // Optional: early skip jeśli poza bboxami obu stron
+            int d0 = int.MaxValue, d1 = int.MaxValue;
+            for (int id = 0; id < MaxAgents; ++id)
+            {
+                ref readonly var ag = ref Agents[id];
+                if (!ag.Alive) continue;
+
+                int d = Math.Abs(ag.X - x) + Math.Abs(ag.Y - y);
+                if (ag.Wetness >= 50) d <<= 1;
+
+                if (ag.playerId == 0) d0 = Math.Min(d0, d);
+                else d1 = Math.Min(d1, d);
+            }
+
+            if (d0 < d1) diff++;
+            else if (d1 < d0) diff--;
+            // w przeciwnym razie nikt nie kontroluje
+        }
+
+        if (diff > 0) Score0 += diff;
+        else if (diff < 0) Score1 -= diff;
     }
 
-    // ---------- 6) GAME‑OVER ----------
     private void CheckGameOver()
     {
         int lead = Score0 - Score1;
@@ -819,11 +732,10 @@ public sealed class GameState
         ref readonly var ag = ref Agents[agentId];
         if (!ag.Alive) return 0;
 
-        // ─── 1.  MOVE kandydaci (Stay + 4 ortogonalne puste) ────────────────
         Span<MoveAction> moves = stackalloc MoveAction[5];
         int mCnt = 0;
         moves[mCnt++] = new MoveAction(MoveType.Step, ag.X, ag.Y);  // Stay
-        foreach (var (dx, dy) in Dir4)
+        foreach (var (dx, dy) in Helpers.Dir4)
         {
             byte nx = (byte)(ag.X + dx);
             byte ny = (byte)(ag.Y + dy);
@@ -894,50 +806,70 @@ public sealed class GameState
             _ => 1.0
         };
 
-    public string DebugString()
+}
+
+public static class PathCache
+{
+    public static readonly byte[,,] FirstStep = new byte[GameState.Cells, GameState.Cells, 2];
+    public static bool Ready;
+
+    public static void Precompute(GameState st)
     {
-        var sb = new System.Text.StringBuilder(2048);
-        sb.AppendLine($"[GameState] Turn={Turn} | W={W} H={H} | Score: P0={Score0}, P1={Score1} | Over={IsGameOver} Winner={Winner}");
-
-        sb.AppendLine("Tiles:");
-        for (int y = 0; y < H; y++)
-        {
-            for (int x = 0; x < W; x++)
+        for (int sy = 0; sy < st.H; sy++)
+            for (int sx = 0; sx < st.W; sx++)
             {
-                var tile = Tiles[ToIndex(x, y)];
-                char c = tile switch
+                int from = GameState.ToIndex(sx, sy);
+                if (GameState.Tiles[from] != TileType.Empty) continue;
+
+                Span<bool> visited = stackalloc bool[GameState.Cells];
+                Span<int> parent = stackalloc int[GameState.Cells];
+
+                visited.Clear();
+                for (int i = 0; i < GameState.Cells; i++) parent[i] = -1;
+
+                Span<int> queue = stackalloc int[GameState.Cells];
+                int qHead = 0, qTail = 0;
+
+                visited[from] = true;
+                queue[qTail++] = from;
+
+                while (qHead < qTail)
                 {
-                    TileType.Empty => '.',
-                    TileType.LowCover => 'L',
-                    TileType.HighCover => 'H',
-                    _ => '?'
-                };
-                sb.Append(c);
+                    int cur = queue[qHead++];
+                    int cx = cur % GameState.MaxW, cy = cur / GameState.MaxW;
+
+                    foreach (var (dx, dy) in Helpers.Dir4)
+                    {
+                        int nx = cx + dx, ny = cy + dy;
+                        if (!st.InBounds(nx, ny)) continue;
+                        int ni = GameState.ToIndex(nx, ny);
+                        if (visited[ni] || GameState.Tiles[ni] != TileType.Empty) continue;
+
+                        visited[ni] = true;
+                        parent[ni] = cur;
+                        queue[qTail++] = ni;
+                    }
+                }
+
+                for (int ty = 0; ty < st.H; ty++)
+                    for (int tx = 0; tx < st.W; tx++)
+                    {
+                        int to = GameState.ToIndex(tx, ty);
+                        if (!visited[to]) continue;
+
+                        // Odtwórz pierwszy krok z parent[]
+                        int step = to;
+                        while (parent[step] != from && parent[step] != -1)
+                            step = parent[step];
+
+                        if (step == from) continue;
+
+                        PathCache.FirstStep[from, to, 0] = (byte)(step % GameState.MaxW);
+                        PathCache.FirstStep[from, to, 1] = (byte)(step / GameState.MaxW);
+                    }
             }
-            sb.AppendLine();
-        }
 
-        sb.AppendLine("Agents:");
-        for (int id = 0; id < MaxAgents; id++)
-        {
-            ref readonly var ag = ref Agents[id];
-            if (!ag.Alive) continue;
-            var cls = AgentClasses[id];
-            sb.AppendLine($"  [{id}] Player={ag.playerId} Class={cls} Pos=({ag.X},{ag.Y}) CD={ag.Cooldown} Wet={ag.Wetness} Bombs={ag.SplashBombs} Hunkering={ag.Hunkering}");
-        }
-
-        sb.AppendLine("Occupancy:");
-        for (int y = 0; y < H; y++)
-        {
-            for (int x = 0; x < W; x++)
-            {
-                int idx = ToIndex(x, y);
-                sb.Append(Occup.Test(idx) ? '#' : '.');
-            }
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
+        Ready = true;
     }
 }
 
@@ -981,7 +913,6 @@ public static class GameStateReader
         return gs;
     }
 
-    //──────────────────────── init helpers ──────────────────────────────
     private static void ReadInit(TextReader input)
     {
         int agentDataCount  = int.Parse(input.ReadLine()!);
@@ -991,7 +922,7 @@ public static class GameStateReader
         {
             var t = input.ReadLine()!.Split(' ');
             tmpAgents[i] = (
-                int.Parse(t[0]) - 1,          // 1-based → 0-based
+                int.Parse(t[0]) - 1,
                 int.Parse(t[1]),
                 int.Parse(t[2]),
                 int.Parse(t[3]),
@@ -1025,109 +956,346 @@ public static class GameStateReader
                 GameState.Tiles[GameState.ToIndex((byte)x,(byte)y)] = (TileType)tileType;
             }
         }
-
+        if (!PathCache.Ready)
+            PathCache.Precompute(gs);
         _baseState = gs;
         _initDone  = true;
     }
 }
 
-// ===== Phases/OpeningPhase.cs =====
+// ===== Bots/AI.cs =====
 
-
-public sealed class OpeningPhase : IGamePhase
+public abstract class AI
 {
-    private readonly Dictionary<int, AgentPlan> _plans = new();
-    private MapAnalyzer? _map;
-    private PathPlanner? _planner;
-    private HashSet<(int x, int y)>[] _coveredTiles;
+    public int PlayerId { get; protected set; }
 
-    public void Enter(GameState st, int myPlayerId)
+    public virtual void Initialize(int playerId) => PlayerId = playerId;
+
+    public abstract TurnCommand GetMove(GameState state);
+}
+
+// ===== Bots/Esdeath.cs =====
+
+
+public enum Phase
+{
+    Opening,
+    MidGame,
+    EndGame,
+}
+
+public enum Orders : byte
+{
+    StandYourGround = 0,
+    Offensive = 1,
+    Defensive = 2,
+    Retreat = 3,
+    Flank = 4,
+    Hunt = 5,
+}
+
+public static class PhaseOrders
+{
+    public static readonly Dictionary<Phase, Orders[]> AllowedOrders = new()
     {
-        _map = new MapAnalyzer(st, myPlayerId);
-        _planner = new PathPlanner(_map, st, myPlayerId);
+        [Phase.Opening] = new[] { Orders.StandYourGround, Orders.Offensive, Orders.Defensive },
+        [Phase.MidGame] = new[] { Orders.StandYourGround, Orders.Offensive, Orders.Defensive },
+        [Phase.EndGame] = new[] { Orders.StandYourGround, Orders.Offensive, Orders.Defensive }
+    };
 
-        CalculateCoveredTiles(st);
-        var myAgents = st.Agents
-                        .Select((ag, id) => (ag, id))
-                        .Where(t => t.ag.Alive && t.ag.playerId == myPlayerId)
-                        .OrderBy(t => t.id)
-                        .Select(t => t.id)
-                        .ToList();
-
-        var reserved = new Dictionary<int, HashSet<(int x, int y)>>();
-        var initialOcc = new HashSet<(int x, int y)>(
-            myAgents.Select(id => ((int)st.Agents[id].X, (int)st.Agents[id].Y))
-        );
-
-        foreach (var id in myAgents)
+    public static Phase DeterminePhase(GameState st, int myId)
+    {
+        int total = 0, alive = 0;
+        foreach (var ag in st.Agents)
         {
-            var me = st.Agents[id];
-            (int tx, int ty) = GameState.AgentClasses[id] switch
+            if (ag.playerId != myId) continue;
+            total++;
+            if (ag.Alive) alive++;
+        }
+        int turn = st.Turn;
+
+        if (turn < 4)
+            return Phase.Opening;
+
+        if (alive * 2 <= total)
+            return Phase.EndGame;
+
+        return Phase.MidGame;
+    }
+
+}
+
+
+public sealed class Esdeath : AI
+{
+
+    // ======= Opponent model =================================================================
+    private readonly AI _opponentBot;
+
+    // ──────────────────────────────────── Search params ─────────────────────────────────────
+
+    // ───────────────────────────────── Cover distance cache ────────────────────────────
+    private HashSet<(int x, int y)>[] _coveredTiles;
+    private int[] _coverDist = Array.Empty<int>();
+    private bool _first = false;
+    private readonly Random _rng = new();
+    private readonly Stopwatch _timer = new();
+    private int _lastTurn = -1;
+
+    private readonly struct Individual
+    {
+        public readonly Orders[] Sequence;
+        public readonly double Score;
+
+        public Individual(Orders[] seq, double score)
+        {
+            Sequence = seq;
+            Score = score;
+        }
+    }
+
+    public Esdeath(
+        AI? opponent = null
+    )
+    {
+        _opponentBot = opponent ?? new CoverBot();
+        _coveredTiles = new HashSet<(int x, int y)>[GameState.MaxW * GameState.MaxH];
+    }
+
+    public override TurnCommand GetMove(GameState st)
+    {
+        if (!_first)
+        {
+            CalculateCoveredTiles(st);
+            _first = true;
+        }
+        Phase phase = PhaseOrders.DeterminePhase(st, PlayerId);
+        Orders[] legalOrders = PhaseOrders.AllowedOrders[phase];
+
+        int budgetMs = st.Turn == 0 ? 950 : 47;
+        _timer.Restart();
+        throw new NotImplementedException("Esdeath bot is not implemented yet.");
+
+    }
+
+    public TurnCommand GenerateOrderCommand(GameState st, Orders order, int myId)
+    {
+        var cmd = new TurnCommand(GameState.MaxAgents);
+
+        for (int id = 0; id < GameState.MaxAgents; id++)
+        {
+            ref readonly var ag = ref st.Agents[id];
+            if (!ag.Alive || ag.playerId != myId) continue;
+
+            AgentOrder ao = order switch
             {
-                AgentClass.Sniper => _planner.BestSniperSpotForRow(_planner.AssaultRow, me),
-                AgentClass.Bomber => (st.W / 2, _planner.AssaultRow),
-                _                 => _planner.AssaultTarget()
+                Orders.Offensive       => AggressiveOrder(st, id),
+                Orders.Defensive       => DefensiveOrder(st, id),
+                Orders.StandYourGround => StandYourGroundOrder(st, id),
+                _                      => default
             };
 
-            var fullPath = _planner.FindFullPath(
-                me.X, me.Y,
-                tx, ty,
-                forbiddenFirstSteps: new HashSet<(int,int)>(),
-                initialOccupied: initialOcc
-            );
-            bool collide;
-            do
-            {
-                collide = false;
-                for (int step = 1; step < fullPath.Count; step++)
+            cmd.Orders[id] = ao;
+            cmd.ActiveMask |= 1UL << id;
+        }
+
+        return cmd;
+    }
+
+    private AgentOrder AggressiveOrder(GameState st, int id)
+    {
+        ref readonly var ag = ref st.Agents[id];
+        var myClass = GameState.AgentClasses[id];
+        var myStats = AgentUtils.Stats[myClass];
+
+        // Przeciwny brzeg
+        int targetX = st.W - 1;
+        if (ag.X > st.W / 2) targetX = 0;
+
+        // MOVE: jeden krok w stronę targetX
+        byte bestX = ag.X, bestY = ag.Y;
+        int bestDist = GameState.Mdist(ag.X, ag.Y, targetX, ag.Y);
+        foreach (var (dx, dy) in Helpers.Dir4)
+        {
+            byte nx = (byte)(ag.X + dx);
+            byte ny = (byte)(ag.Y + dy);
+            if (!st.InBounds(nx, ny)) continue;
+            int idx = GameState.ToIndex(nx, ny);
+            if (GameState.Tiles[idx] != TileType.Empty || st.Occup.Test(idx)) continue;
+
+            int d = GameState.Mdist(nx, ny, targetX, ny);
+            if (d < bestDist) { bestDist = d; bestX = nx; bestY = ny; }
+        }
+
+        if (ag.SplashBombs > 0)
+        {
+            for (int y = 0; y < st.H; y++)
+                for (int x = 0; x < st.W; x++)
                 {
-                    if (reserved.TryGetValue(step, out var occ) &&
-                        occ.Contains(fullPath[step]))
+                    if (Math.Abs(x - ag.X) + Math.Abs(y - ag.Y) > 4) continue;
+
+                    int enemies = 0, allies = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int tx = x + dx, ty = y + dy;
+                            if (!st.InBounds(tx, ty)) continue;
+                            int aid = st.AgentAt((byte)tx, (byte)ty);
+                            if (aid == -1) continue;
+                            if (st.Agents[aid].playerId == ag.playerId) allies++; else enemies++;
+                        }
+
+                    if (enemies >= 2 && allies == 0)
                     {
-                        // konflikt – wstaw pauzę (czekanie) przed ruchem
-                        fullPath.Insert(1, fullPath[0]);
-                        collide = true;
-                        break;
+                        return new AgentOrder
+                        {
+                            Move = new MoveAction(MoveType.Step, bestX, bestY),
+                            Combat = new CombatAction(CombatType.Throw, (ushort)x, (byte)y)
+                        };
                     }
                 }
-            } while (collide);
-            for (int step = 1; step < fullPath.Count; step++)
-            {
-                if (!reserved.TryGetValue(step, out var occ))
-                {
-                    occ = new HashSet<(int, int)>();
-                    reserved[step] = occ;
-                }
-                occ.Add(fullPath[step]);
-            }
-            if (Config.DebugEnabled)
-            {
-                var pathStr = string.Join(" -> ", fullPath
-                    .Select(p => $"({p.x},{p.y})"));
-                Console.Error.WriteLine($"[DEBUG] Agent {id} path: {pathStr}");
-            }
-
-            var q = new Queue<(byte, byte)>();
-            foreach (var (x,y) in fullPath.Skip(1))
-                q.Enqueue((x, y));
-
-            _plans[id] = new AgentPlan(q, GameState.AgentClasses[id]);
         }
 
-        if (Config.DebugEnabled)
-            Console.Error.WriteLine(_map.FormatSniperSpots(15));
-
-        if (Config.DebugEnabled)
+        // COMBAT: strzelaj jeśli w zasięgu
+        for (int eid = 0; eid < GameState.MaxAgents; eid++)
         {
-            var sb = new StringBuilder("Plans:");
-            foreach (var (id, plan) in _plans)
-            {
-                var tgt = plan.PeekTarget();
-                int dist = GameState.Mdist(st.Agents[id].X, st.Agents[id].Y, tgt.x, tgt.y);
-                sb.Append($" [{id}:{plan.Class}->{tgt.x},{tgt.y}|d{dist}]");
-            }
-            Console.Error.WriteLine(sb.ToString());
+            ref readonly var enemy = ref st.Agents[eid];
+            if (!enemy.Alive || enemy.playerId == ag.playerId) continue;
+            int dist = GameState.Mdist(ag.X, ag.Y, enemy.X, enemy.Y);
+            if (dist <= myStats.OptimalRange * 2 && ag.Cooldown == 0)
+                return new AgentOrder
+                {
+                    Move = new MoveAction(MoveType.Step, bestX, bestY),
+                    Combat = new CombatAction(CombatType.Shoot, (ushort)eid)
+                };
         }
+
+        // inaczej: zwykły ruch i hunker
+        return new AgentOrder
+        {
+            Move = new MoveAction(MoveType.Step, bestX, bestY),
+            Combat = new CombatAction(CombatType.Hunker)
+        };
+    }
+
+    private AgentOrder DefensiveOrder(GameState st, int id)
+    {
+        ref readonly var ag = ref st.Agents[id];
+        double bestScore = double.NegativeInfinity;
+        (byte x, byte y) bestMove = (ag.X, ag.Y);
+
+        foreach (var (dx, dy) in Helpers.Dir4)
+        {
+            byte nx = (byte)(ag.X + dx), ny = (byte)(ag.Y + dy);
+            if (!st.InBounds(nx, ny)) continue;
+            int idx = GameState.ToIndex(nx, ny);
+            if (GameState.Tiles[idx] != TileType.Empty || st.Occup.Test(idx)) continue;
+
+            int coverBonus = 0;
+            foreach (var (ox, oy) in Helpers.Dir4)
+            {
+                int cx = nx + ox, cy = ny + oy;
+                if (!st.InBounds(cx, cy)) continue;
+                var tile = GameState.Tiles[GameState.ToIndex(cx, cy)];
+                if (tile == TileType.LowCover) coverBonus += 2;
+                if (tile == TileType.HighCover) coverBonus += 4;
+            }
+
+            int allyDist = 0;
+            foreach (var other in st.Agents)
+            {
+                if (!other.Alive || other.playerId != ag.playerId || other.X == ag.X && other.Y == ag.Y) continue;
+                allyDist += 5 - GameState.Mdist(nx, ny, other.X, other.Y);  // preferuje bliżej
+            }
+
+            double score = coverBonus + allyDist;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestMove = (nx, ny);
+            }
+        }
+
+        return new AgentOrder
+        {
+            Move = new MoveAction(MoveType.Step, bestMove.x, bestMove.y),
+            Combat = new CombatAction(CombatType.Hunker)
+        };
+    }
+
+    private AgentOrder StandYourGroundOrder(GameState st, int id)
+    {
+        ref readonly var ag = ref st.Agents[id];
+
+        foreach (var (dx, dy) in Helpers.Dir4)
+        {
+            int nx = ag.X + dx;
+            int ny = ag.Y + dy;
+            if (!st.InBounds(nx, ny)) continue;
+            int idx = GameState.ToIndex(nx, ny);
+            if (GameState.Tiles[idx] is TileType.LowCover or TileType.HighCover)
+            {
+                int cx = ag.X + dx, cy = ag.Y + dy;
+                int cidx = GameState.ToIndex(cx, cy);
+                if (!st.Occup.Test(cidx))
+                {
+                    return new AgentOrder
+                    {
+                        Move = new MoveAction(MoveType.Step, (byte)cx, (byte)cy),
+                        Combat = new CombatAction(CombatType.Hunker)
+                    };
+                }
+            }
+        }
+
+        // W przeciwnym razie: shoot jeśli widzi
+        var stats = AgentUtils.Stats[GameState.AgentClasses[id]];
+        if (ag.Cooldown == 0)
+        {
+            for (int i = 0; i < GameState.MaxAgents; ++i)
+            {
+                ref readonly var trg = ref st.Agents[i];
+                if (!trg.Alive || trg.playerId == ag.playerId) continue;
+                if (GameState.Mdist(ag.X, ag.Y, trg.X, trg.Y) <= stats.OptimalRange * 2)
+                    return new AgentOrder
+                    {
+                        Move = new MoveAction(MoveType.Step, ag.X, ag.Y),
+                        Combat = new CombatAction(CombatType.Shoot, (ushort)i)
+                    };
+            }
+        }
+
+        // Albo rzuć bombę jeśli warto
+        if (ag.SplashBombs > 0)
+        {
+            for (int y = 0; y < st.H; y++)
+                for (int x = 0; x < st.W; x++)
+                {
+                    if (Math.Abs(x - ag.X) + Math.Abs(y - ag.Y) > 4) continue;
+                    int enemies = 0, allies = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int tx = x + dx, ty = y + dy;
+                            if (!st.InBounds(tx, ty)) continue;
+                            int aid = st.AgentAt((byte)tx, (byte)ty);
+                            if (aid == -1) continue;
+                            if (st.Agents[aid].playerId == ag.playerId) allies++; else enemies++;
+                        }
+                    if (enemies >= 2 && allies == 0)
+                        return new AgentOrder
+                        {
+                            Move = new MoveAction(MoveType.Step, ag.X, ag.Y),
+                            Combat = new CombatAction(CombatType.Throw, (ushort)x, (byte)y)
+                        };
+                }
+        }
+
+        return new AgentOrder
+        {
+            Move = new MoveAction(MoveType.Step, ag.X, ag.Y),
+            Combat = new CombatAction(CombatType.Hunker)
+        };
     }
 
     private void CalculateCoveredTiles(GameState st)
@@ -1159,7 +1327,7 @@ public sealed class OpeningPhase : IGamePhase
                     {
                         int sIdx = GameState.ToIndex(sx, sy);
                         if (tiles[sIdx] != TileType.Empty) continue;
-                        if (GameState.Cdist(tx, ty, sx, sy) <= 1) continue;
+                        if (GameState.Cdist(tx, ty, sx, sy) <= 1 || GameState.Mdist(tx, ty, sx, sy) > 12) continue;
 
                         double coverMod = 1.0;
                         bool sameCover = false;
@@ -1207,1399 +1375,8 @@ public sealed class OpeningPhase : IGamePhase
                     }
             }
     }
-
-    public TurnCommand GetMove(GameState st)
-    {
-        var cmd = new TurnCommand(GameState.MaxAgents);
-        foreach (var kv in _plans.ToArray())
-        {
-            int id = kv.Key;
-            if (!st.Agents[id].Alive) { _plans.Remove(id); continue; }
-
-            var mv = kv.Value.NextMove(st, id);
-            cmd.SetMove(id, mv);
-
-            var cls = kv.Value.Class;
-            switch (cls)
-            {
-                case AgentClass.Sniper:
-                    Helpers.TrySniperShoot(st, id, ref cmd);
-                    break;
-                case AgentClass.Bomber:
-                    Helpers.TryOpportunisticThrow(st, id, ref cmd);
-                    break;
-            }
-        }
-        return cmd;
-    }
-
-    public bool ShouldExit(GameState st) => st.W < 18 ? st.Turn >= 3 : st.Turn >= 4; 
-    public IGamePhase? GetNextPhase(GameState _) => new DevelopmentPhase(_plans, _planner!.AssaultRow, _coveredTiles, _map!.SniperSpots);
 }
 
-
-public sealed class MapAnalyzer
-{
-    public readonly List<(int x, int y, int score)> SniperSpots = new();
-    public readonly (int x, int y) Center;
-    private readonly (double x, double y) _enemyCtr;
-    private const int SHOT_RANGE = 12;
-
-    private readonly int w, h;
-
-    public MapAnalyzer(GameState st, int myPlayerId)
-    {
-        w = st.W; h = st.H; Center = (w / 2, h / 2);
-        var tiles = GameState.Tiles;
-        var myPos = new List<(int x, int y)>();
-        var enemyPos = new List<(int x, int y)>();
-        foreach (var ag in st.Agents.Where(a => a.Alive))
-            (ag.playerId == myPlayerId ? myPos : enemyPos).Add((ag.X, ag.Y));
-        _enemyCtr = (
-            enemyPos.Average(p => (double)p.x),
-            enemyPos.Average(p => (double)p.y)
-        );
-
-        foreach (var pos in EmptyTilesAdjacentToCover(tiles, w, h))
-        {
-            int rawScore = 0;
-
-            foreach (var dir in Helpers.Dir4)
-            {
-                int cx = pos.x + dir.x, cy = pos.y + dir.y;
-                if (!InBounds(cx, cy, w, h)) continue;
-
-                var cover = tiles[GameState.ToIndex((byte)cx, (byte)cy)];
-                if (cover is not (TileType.LowCover or TileType.HighCover)) continue;
-
-                double coverWeight = cover == TileType.LowCover ? 1 : 2;
-                var toEnemy = (_enemyCtr.x - pos.x, _enemyCtr.y - pos.y);
-                double dot = dir.x * toEnemy.Item1 + dir.y * toEnemy.Item2;
-                coverWeight *= dot > 0 ? 1.0 : 0.2;
-
-                for (int step = 1; step <= SHOT_RANGE; step++)
-                {
-                    int sx = pos.x + dir.x * (step + 1);
-                    int sy = pos.y + dir.y * (step + 1);
-                    if (!InBounds(sx, sy, w, h)) break;
-
-                    var tile = tiles[GameState.ToIndex(sx, sy)];
-                    if (tile is TileType.LowCover or TileType.HighCover)
-                        break;
-
-                    rawScore += (int)coverWeight;
-                }
-            }
-            if (rawScore == 0) continue;
-            int centerPenalty = GameState.Mdist(pos.x, pos.y, Center.x, Center.y);
-            int distToTeam = myPos.Min(p => GameState.Mdist(pos.x, pos.y, p.x, p.y));
-            int distToEnemy = GameState.Mdist(pos.x, pos.y, (int)_enemyCtr.x, (int)_enemyCtr.y);
-
-
-            int score = rawScore * 10
-                        - centerPenalty * 2
-                        - distToTeam
-                        - distToEnemy;
-            SniperSpots.Add((pos.x, pos.y, score));
-        }
-        SniperSpots.Sort((a, b) => b.score != a.score ? b.score.CompareTo(a.score) : (a.x + a.y).CompareTo(b.x + b.y));
-    }
-
-    public string FormatSniperSpots(int top = 10)
-        => string.Join(" ", SniperSpots.Take(top).Select(p => $"({p.x},{p.y}:{p.score})"));
-
-    private static IEnumerable<(int x, int y)> EmptyTilesAdjacentToCover(TileType[] tiles, int w, int h)
-    {
-        foreach (var (x, y) in GridIndices(w, h))
-        {
-            if (tiles[GameState.ToIndex(x, y)] != TileType.Empty) continue;
-            foreach (var dir in Helpers.Dir4)
-            {
-                int nx = x + dir.x, ny = y + dir.y;
-                if (!InBounds(nx, ny, w, h)) continue;
-                if (tiles[GameState.ToIndex(nx, ny)] is TileType.LowCover or TileType.HighCover)
-                { yield return (x, y); break; }
-            }
-        }
-    }
-
-    private static IEnumerable<(int x, int y)> GridIndices(int w, int h)
-    {
-        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) yield return (x, y);
-    }
-    private static bool InBounds(int x, int y, int w, int h)
-        => (uint)x < w && (uint)y < h;
-}
-
-public sealed class PathPlanner
-{
-    private readonly MapAnalyzer map;
-    private readonly GameState st;
-    private readonly int _spawnSide;          // -1 = lewy brzeg, +1 = prawy brzeg
-    private readonly int _assaultRow;         // Y-rząd, którym idzie drużyna
-    public int AssaultRow => _assaultRow;
-    public PathPlanner(MapAnalyzer m, GameState s, int myId)
-    {
-        map = m; st = s;
-
-        //  ❱❱ 1. wyznacz stronę spawnu (średnie X własnych agentów)
-        double myAvgX = st.Agents.Where(a => a.Alive && a.playerId == myId)
-                                    .Average(a => (double)a.X);
-        _spawnSide = myAvgX < st.W / 2.0 ? -1 : +1;
-
-        //  ❱❱ 2. wybierz najlepszy wiersz (osi Y) dla Assault-Squadu
-        _assaultRow = PickAssaultRow();
-    }
-
-    public List<(byte x, byte y)> FindFullPath(
-        int sx, int sy,
-        int tx, int ty,
-        ISet<(int x, int y)> forbiddenFirstSteps,
-        ISet<(int x, int y)> initialOccupied
-    ) {
-        var w = st.W;
-        var h = st.H;
-        var visited = new bool[w, h];
-        var parent = new (int px, int py, int fx, int fy)?[w, h];
-        var q = new Queue<(int x, int y)>();
-        visited[sx, sy] = true;
-        parent[sx, sy] = null;
-        q.Enqueue((sx, sy));
-
-        while (q.Count > 0) {
-            var (x, y) = q.Dequeue();
-            if (x == tx && y == ty) break;
-            foreach (var (dx, dy) in Helpers.Dir4) {
-                int nx = x + dx, ny = y + dy;
-                if (!st.InBounds(nx, ny)) continue;
-                if (visited[nx, ny]) continue;
-                // tylko puste pola
-                if (GameState.Tiles[GameState.ToIndex(nx, ny)] != TileType.Empty)
-                    continue;
-                // jeżeli to jest pierwszy krok (x==sx, y==sy), to sprawdź zakazy
-                if (x == sx && forbiddenFirstSteps.Contains((nx, ny)))
-                    continue;
-                // nie daj się wpakować na czyjąś startową pozycję
-                if (x == sx && initialOccupied.Contains((nx, ny)))
-                    continue;
-
-                visited[nx, ny] = true;
-                // zapamiętujemy: parent[nx,ny] = (poprzedni X, poprzedni Y, pierwszyKrokX, pierwszyKrokY)
-                (int fx, int fy) first = (x == sx ? (nx, ny) : (parent[x, y]!.Value.fx, parent[x, y]!.Value.fy));
-                parent[nx, ny] = (x, y, first.fx, first.fy);
-                q.Enqueue((nx, ny));
-            }
-        }
-
-        // zbuduj ścieżkę wstecz:
-        if (!visited[tx, ty]) return new List<(byte, byte)> { ((byte)sx, (byte)sy) }; 
-        var path = new List<(byte, byte)>();
-        int cx = tx, cy = ty;
-        while (cx != sx || cy != sy) {
-            path.Add(((byte)cx, (byte)cy));
-            var p = parent[cx, cy]!.Value;
-            cx = p.px; cy = p.py;
-        }
-        path.Reverse();
-        // dopisz start
-        path.Insert(0, ((byte)sx, (byte)sy));
-        return path;
-    }
-
-    // główna metoda budująca kolejkę (1-elementową) targetu
-    public Queue<(byte x, byte y)> BuildPath(int id, AgentClass cls)
-    {
-        var me = st.Agents[id];
-        (int tx, int ty) target = cls switch
-        {
-            AgentClass.Sniper => BestSniperSpotForRow(_assaultRow, me),
-            AgentClass.Bomber => (st.W / 2, _assaultRow),
-            _ => AssaultTarget(),   // Gunner / Assault / Berserker
-        };
-
-        var q = new Queue<(byte, byte)>();
-        q.Enqueue(((byte)target.tx, (byte)target.ty));
-        return q;
-    }
-
-    /* ─── logika drużynowa ───────────────────────────────────────────────── */
-
-    // Docelowe pole dla Assault-Squadu – pusty tile przy coverze,
-    // w połowie planszy, po naszej stronie.
-    public (int tx, int ty) AssaultTarget()
-    {
-        int centerX = st.W / 2 - _spawnSide;
-
-        // szukamy pustych pól w _assaultRow w promieniu 3 od centerX,
-        // priorytet: adjacent-cover > puste
-        for (int dx = 0; dx <= 3; dx++)
-        {
-            foreach (int sign in new[] { 0, -dx, dx })
-            {
-                int x = centerX + sign;
-                if ((uint)x >= st.W) continue;
-                int idx = GameState.ToIndex(x, _assaultRow);
-                if (GameState.Tiles[idx] != TileType.Empty) continue;
-
-                // czy obok cover?
-                bool nearCover = Helpers.Dir4.Any(d =>
-                {
-                    int nx = x + d.x, ny = _assaultRow + d.y;
-                    return (uint)nx < st.W && (uint)ny < st.H &&
-                           GameState.Tiles[GameState.ToIndex(nx, ny)] is TileType.LowCover or TileType.HighCover;
-                });
-
-                if (nearCover || dx == 3)      // preferuj cover, ale nie wisz na zawsze
-                    return (x, _assaultRow);
-            }
-        }
-        return (centerX, _assaultRow);        // fallback – nigdy nie powinno się zdarzyć
-    }
-
-    // Najlepsza pozycja snajpera, ALE preferujemy wiersz assaultRow
-    public (int tx, int ty) BestSniperSpotForRow(int row, AgentState me)
-    {
-        var sameRow = map.SniperSpots.Where(p => (p.y == row) || (p.y == row + 1) || (p.y == row - 1)).ToList();
-        var pool = sameRow.Count > 0 ? sameRow : map.SniperSpots;
-        if (pool.Count == 0) return (st.W / 2, _assaultRow);
-        return pool.OrderByDescending(p => p.score)
-                    .ThenBy(p => GameState.Mdist(me.X, me.Y, p.x, p.y))
-                    .Select(p => (p.x, p.y))
-                    .First();
-    }
-
-    // heurystyka wyboru assaultRow: najwięcej coverów w linii poziomej,
-    // ale tylko w „naszej połowie” planszy (x ≤ W/2  lub  ≥ W/2)
-    private int PickAssaultRow()
-    {
-        int w = st.W, h = st.H, half = w / 2;
-        int bestRow = st.H / 2, bestScore = -1;
-
-        for (int y = 0; y < h; y++)
-        {
-            int score = 0;
-            for (int x = 0; x < w; x++)
-            {
-                if (_spawnSide == -1 && x > half) continue;
-                if (_spawnSide == +1 && x < half) continue;
-
-                var tile = GameState.Tiles[GameState.ToIndex(x, y)];
-                if (tile is TileType.LowCover or TileType.HighCover) score++;
-            }
-            if (score > bestScore)
-            { bestScore = score; bestRow = y; }
-        }
-        return bestRow;
-    }
-}
-
-public sealed class AgentPlan
-{
-    private readonly Queue<(byte x, byte y)> _path;
-    public AgentClass Class { get; }
-    public AgentTask? Task { get; set; }
-
-    public bool HasPendingTarget => _path.Count > 0;
-    public (byte x, byte y)? PeekTargetOrNull()
-        => _path.Count > 0 ? _path.Peek() : null;
-
-    public AgentPlan(Queue<(byte, byte)> path, AgentClass cls, AgentTask? task = null)
-    { _path = path; Class = cls; Task = task; }
-
-    public MoveAction NextMove(GameState st, int id)
-    {
-        var me = st.Agents[id];
-        if (Task != null)
-        {
-            switch (Task.Type)
-            {
-                case AgentTaskType.Flank:
-                    if (Task.TargetHint is (int tx, int ty))
-                    {
-                        Console.Error.WriteLine($"[DEBUG] Agent {id} flank task: {Task.TargetHint}");
-                        var flankY = ty + (me.Y < ty ? 1 : -1);
-                        OverrideTarget(tx, flankY);
-                    }
-                    break;
-                case AgentTaskType.PushToCover:
-                    if (Task.TargetHint is (int tx3, int ty3))
-                    {
-                        Console.Error.WriteLine($"[DEBUG] Agent {id} push task: {Task.TargetHint}");
-                        OverrideTarget(tx3, ty3);
-                    }
-                    else
-                    {
-                        Console.Error.WriteLine($"[DEBUG] Agent {id} push task: center");
-                        OverrideTarget(st.W / 2, st.H / 2);
-                    }
-                    break;
-                case AgentTaskType.HoldLine:
-                    if (Task.TargetHint is (int tx4, int ty4))
-                    {
-                        Console.Error.WriteLine($"[DEBUG] Agent {id} hold line: {Task.TargetHint}");
-                        if (GameState.Mdist(me.X, me.Y, tx4, ty4) > 1)
-                            OverrideTarget(tx4, ty4);
-                    }
-                    break;
-                case AgentTaskType.SupportWithSplash:
-                    Console.Error.WriteLine($"[DEBUG] Agent {id} support with splash: {Task.TargetHint}");
-                    if (Task.TargetHint is (int tx5, int ty5))
-                        OverrideTarget(tx5, ty5);
-                    else
-                        OverrideTarget(st.W / 2, st.H / 2);
-                    break;
-            }
-        }
-        if (_path.Count == 0) return new MoveAction(MoveType.Step, me.X, me.Y);
-        var (x, y) = _path.Peek();
-
-        if (me.X == x && me.Y == y) { _path.Dequeue(); return new MoveAction(MoveType.Step, me.X, me.Y); }
-        if (st.AgentAt(x, y) != -1) return new MoveAction(MoveType.Step, me.X, me.Y);
-        return new MoveAction(MoveType.Step, x, y);
-    }
-    public (byte x, byte y) PeekTarget()
-        => _path.Count > 0 ? _path.Peek() : ((byte)0, (byte)0);
-
-    public void OverrideTarget(int x, int y)
-    {
-        _path.Clear();
-        _path.Enqueue(((byte)x, (byte)y));
-    }
-
-}
-
-
-public static class Helpers
-{
-    public static readonly (int x, int y)[] Dir4 =
-        { (1, 0), (-1, 0), (0, 1), (0, -1) };
-
-    public static bool TrySniperShoot(GameState st, int id, ref TurnCommand cmd)
-    {
-        var me = st.Agents[id];
-        if (me.Cooldown > 0) return false;
-        int best = -1, bestWet = -1;
-        for (int i = 0; i < GameState.MaxAgents; ++i)
-        {
-            ref readonly var trg = ref st.Agents[i];
-            if (i == id || !trg.Alive || trg.playerId == me.playerId) continue;
-            int d = GameState.Mdist(me.X, me.Y, trg.X, trg.Y);
-            if (d > 12) continue;
-            if (best == -1 || trg.Wetness > bestWet) { best = i; bestWet = trg.Wetness; }
-        }
-        if (best != -1)
-        {
-            cmd.SetCombat(id, new CombatAction(CombatType.Shoot, (ushort)best));
-            return true;
-        }
-        return false;
-    }
-
-    public static void TryOpportunisticThrow(GameState st, int id, ref TurnCommand cmd)
-    {
-        var me = st.Agents[id];
-        if (me.SplashBombs == 0) return;
-        int bestX = -1, bestY = -1, bestCount = 0;
-        for (int y = 0; y < st.H; y++)
-            for (int x = 0; x < st.W; x++)
-            {
-                if (Math.Abs(x - me.X) + Math.Abs(y - me.Y) > 4) continue;
-                int cnt = 0, friendly = 0;
-                for (int dy = -1; dy <= 1; dy++)
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        int nx = x + dx, ny = y + dy;
-                        if ((uint)nx >= st.W || (uint)ny >= st.H) continue;
-                        int aid = st.AgentAt((byte)nx, (byte)ny);
-                        if (aid == -1) continue;
-                        if (st.Agents[aid].playerId == me.playerId) friendly++;
-                        else cnt++;
-                    }
-                if (friendly == 0 && cnt > bestCount)
-                {
-                    bestCount = cnt; bestX = x; bestY = y;
-                }
-            }
-        if (bestCount >= 2)
-            cmd.SetCombat(id, new CombatAction(CombatType.Throw, (ushort)bestX, (byte)bestY));
-    }
-
-    public static bool TryShootAt(GameState st, int id, int targetId, ref TurnCommand cmd)
-    {
-        ref readonly var me = ref st.Agents[id];
-        if (me.Cooldown > 0) return false;
-
-        ref readonly var trg = ref st.Agents[targetId];
-        if (!trg.Alive) return false;
-
-        int rangeMax = AgentUtils.Stats[GameState.AgentClasses[id]].OptimalRange * 2;
-        if (GameState.Mdist(me.X, me.Y, trg.X, trg.Y) > rangeMax) return false;
-
-        /* ► oszacuj faktyczny dmg po coverze */
-        double cover = GetCoverModifier(id, targetId, st);     // 1.0 / 0.5 / 0.25
-        int soak = AgentUtils.Stats[GameState.AgentClasses[id]].SoakingPower;
-        double dmg = soak * cover;
-
-        const int MinWetness = 12;                              // heurystyczny próg
-        if (dmg < MinWetness) return false;                          // strata czasu
-
-        cmd.SetCombat(id, new CombatAction(CombatType.Shoot, (ushort)targetId));
-        return true;
-    }
-
-    public static double GetCoverModifier(int shooterId, int targetId, GameState st)
-    {
-        ref readonly var sh = ref st.Agents[shooterId];
-        ref readonly var tg = ref st.Agents[targetId];
-
-        int dx = tg.X - sh.X;
-        int dy = tg.Y - sh.Y;
-        double best = 1.0;
-
-        foreach (var (ox, oy) in new[] { (Math.Sign(dx), 0), (0, Math.Sign(dy)) })
-        {
-            if (ox == 0 && oy == 0) continue;
-
-            int cx = tg.X - ox;                       // kratka covera między nami?
-            int cy = tg.Y - oy;
-            if (GameState.Cdist(cx, cy, sh.X, sh.Y) <= 1) continue;   // za blisko
-
-            if (!st.InBounds(cx, cy)) continue;
-
-            var tile = GameState.Tiles[GameState.ToIndex(cx, cy)];
-            double mod = tile switch
-            {
-                TileType.LowCover => 0.5,
-                TileType.HighCover => 0.25,
-                _ => 1.0
-            };
-            best = Math.Min(best, mod);
-        }
-        return best;
-    }
-    
-    public static bool HasCoverNearby(GameState st, int x, int y)
-    {
-        foreach (var (dx, dy) in Dir4)
-        {
-            int nx = x + dx, ny = y + dy;
-            if (!st.InBounds(nx, ny)) continue;
-            var tile = GameState.Tiles[GameState.ToIndex(nx, ny)];
-            if (tile == TileType.LowCover || tile == TileType.HighCover)
-                return true;
-        }
-        return false;
-    }
-}
-
-// ===== Phases/DevelopmentPhase.cs =====
-
-
-public enum EnemyPlan
-{
-    Unknown,
-    CentralPush,
-    FlankAttack,
-    DoubleFlank,
-    SpawnTurtle,
-    FullRush,
-    SplitFlankWithSniper,
-}
-
-public enum AgentTaskType
-{
-    PushToCover,
-    Flank,
-    HoldLine,
-    SupportWithSplash,
-}
-
-public class AgentTask
-{
-    public AgentTaskType Type;
-    public (int x, int y)? TargetHint;
-    public int? EnemyIdFocus;
-    public int Priority;
-
-    public AgentTask(AgentTaskType type, (int, int)? hint = null, int? enemyId = null, int prio = 0)
-    {
-        Type = type;
-        TargetHint = hint;
-        EnemyIdFocus = enemyId;
-        Priority = prio;
-    }
-}
-
-public sealed class DevelopmentPhase : IGamePhase
-{
-    private readonly Dictionary<int, AgentPlan> _plans;
-    private readonly int _assaultRow;
-    private int _myId;
-    private HashSet<(int x, int y)>[] _coveredTiles;
-    private EnemyPlan _currentPlan = EnemyPlan.Unknown;
-
-    public DevelopmentPhase(IReadOnlyDictionary<int, AgentPlan> prev, int assaultRow,
-                             HashSet<(int x, int y)>[] coveredTiles,
-                             List<(int x, int y, int score)> sniperSpots)
-    {
-        _plans = new Dictionary<int, AgentPlan>(prev);
-        _assaultRow = assaultRow;
-        _coveredTiles = coveredTiles;
-    }
-
-    public void Enter(GameState st, int myPlayerId)
-    {
-        _myId = myPlayerId;
-        TryUpdatePlan(st);
-    }
-
-    private void TryUpdatePlan(GameState st)
-    {
-        var newPlan = EnemyPlanRecognizer.Analyze(st, _myId);
-        if (_currentPlan == EnemyPlan.Unknown && newPlan != EnemyPlan.Unknown)
-        {
-            _currentPlan = newPlan;
-            Console.Error.WriteLine($"[DevelopmentPhase] Recognized enemy plan: {_currentPlan}");
-            AgentTaskAssigner.AdaptPlans(st, _plans, _currentPlan, _myId);
-        }
-    }
-
-    public TurnCommand GetMove(GameState st)
-    {
-        TryUpdatePlan(st);
-        var cmd = new TurnCommand(GameState.MaxAgents);
-        var reserved = new HashSet<(byte,byte)>();
-        foreach (var id in _plans.Keys.OrderBy(i => i))
-        {
-            ref readonly var me = ref st.Agents[id];
-            if (!me.Alive) { _plans.Remove(id); continue; }
-
-            var plan = _plans[id];
-            var target = plan.NextMove(st, id);
-            var step = NextStep(st, me.X, me.Y, target.X, target.Y, reserved);
-            MoveAction move;
-            if (step is { } s)                              // da się iść
-            {
-                reserved.Add(s);
-                move = new MoveAction(MoveType.Step, s.x, s.y);
-            }
-            else                                            // nie ruszamy się
-            {
-                move = new MoveAction(MoveType.Step, me.X, me.Y);
-            }
-            cmd.SetMove(id, move);
-
-            switch (plan.Class)
-            {
-                case AgentClass.Sniper:
-                    Helpers.TrySniperShoot(st, id, ref cmd);
-                    break;
-                case AgentClass.Bomber:
-                    Helpers.TryOpportunisticThrow(st, id, ref cmd);
-                    break;
-            }
-        }
-        return cmd;
-    }
-
-    public IGamePhase? GetNextPhase(GameState _) => new CombatPhase(_coveredTiles, _currentPlan, _plans);
-
-    public bool ShouldExit(GameState st)
-    {
-        int readyShooters = 0;
-        int agentsAtFront = 0;
-        Dictionary<int, int> enemyToMyThreats = new();
-
-        foreach (var (id, plan) in _plans)
-        {
-            ref readonly var me = ref st.Agents[id];
-            if (!me.Alive || me.playerId != _myId) continue;
-
-            // 1. Czy widzę przeciwnika i mogę strzelić?
-            if (me.Cooldown == 0)
-            {
-                for (int eid = 0; eid < GameState.MaxAgents; eid++)
-                {
-                    ref readonly var enemy = ref st.Agents[eid];
-                    if (!enemy.Alive || enemy.playerId == _myId) continue;
-
-                    int dist = GameState.Mdist(me.X, me.Y, enemy.X, enemy.Y);
-                    AgentClass cls = GameState.AgentClasses[id];
-                    int maxRange = AgentUtils.Stats[cls].OptimalRange * 2;
-                    if (dist <= maxRange)
-                    {
-                        readyShooters++;
-                        if (!enemyToMyThreats.ContainsKey(eid))
-                            enemyToMyThreats[eid] = 0;
-                        enemyToMyThreats[eid]++;
-                    }
-                }
-            }
-
-            // 2. Czy dotarłem do frontu?
-            if (Math.Abs(me.X - st.W / 2) <= 1)
-                agentsAtFront++;
-        }
-
-        // warunek 1: 2+ moich gotowych do strzału
-        if (readyShooters >= 2)
-            return true;
-
-        // warunek 2: 2+ moich przy froncie
-        if (agentsAtFront >= 2)
-            return true;
-
-        // warunek 3: 1 przeciwnik otoczony przez 2+ moich
-        foreach (var kv in enemyToMyThreats)
-            if (kv.Value >= 2)
-                return true;
-
-        return false;
-    }
-    
-    static readonly (int dx,int dy)[] Dir4 = { (1,0),(-1,0),(0,1),(0,-1) };
-
-    private static (byte x, byte y)? NextStep(GameState st,
-                                            byte sx, byte sy,
-                                            int  tx,  int  ty,
-                                            HashSet<(byte,byte)> reserved)
-    {
-        if (sx == tx && sy == ty) return null;              // już stoimy
-
-        int W = st.W, H = st.H;
-        bool[] vis = new bool[W * H];
-        var q = new Queue<(byte x, byte y, byte fx, byte fy)>();
-
-        Vis(sx, sy);    // startowe pole
-
-        foreach (var (dx,dy) in Dir4)                       // inicjalizuj sąsiadów
-            TryPush((byte)(sx+dx), (byte)(sy+dy), (byte)(sx+dx), (byte)(sy+dy));
-
-        while (q.Count != 0)
-        {
-            var (x,y,fx,fy) = q.Dequeue();
-            if (x == tx && y == ty) return (fx,fy);
-
-            foreach (var (dx,dy) in Dir4)
-                TryPush((byte)(x+dx), (byte)(y+dy), fx, fy);
-        }
-        return null;                                        // brak ścieżki
-
-        /* ------------- lokalne pomocnicze ------------------------------ */
-        void Vis(int x,int y) => vis[y*W + x] = true;
-        bool IsVis(int x,int y) => vis[y*W + x];
-
-        bool IsBlocked(int x,int y)
-        {
-            if ((uint)x >= W || (uint)y >= H) return true;
-            TileType t = GameState.Tiles[y*W + x];                    
-            if (t != TileType.Empty)             return true;         // cover = ściana
-            if (st.AgentAt((byte)x,(byte)y) != -1) return true;     // ktoś stoi
-            if (reserved.Contains(((byte)x,(byte)y))) return true;
-            return false;
-        }
-
-        void TryPush(byte nx, byte ny, byte fx, byte fy)
-        {
-            if (IsBlocked(nx,ny) || IsVis(nx,ny)) return;
-            Vis(nx,ny);
-            q.Enqueue((nx,ny,fx,fy));
-        }
-    }
-}
-
-public static class EnemyPlanRecognizer
-{
-    public static EnemyPlan Analyze(GameState st, int myId)
-    {
-        int w = st.W, h = st.H;
-        int top = 0, bottom = 0, center = 0;
-        
-        var enemies = st.Agents.Where(ag => ag.Alive && ag.playerId != myId).ToList();
-        int enemyCount = enemies.Count;
-        if (enemyCount == 0) return EnemyPlan.Unknown;
-        double avgX = enemies.Average(ag => ag.X);
-        double avgXNorm = avgX / (w - 1);
-        double progress = (myId == 0) 
-            ? (1.0 - avgXNorm) 
-            : avgXNorm;
-        foreach (var ag in enemies)
-        {
-            if (ag.Y < h / 4) top++;
-            else if (ag.Y > 3 * h / 4) bottom++;
-            else center++;
-        }
-        double pctCenter  = center      / (double)enemyCount;
-        double pctTop     = top         / (double)enemyCount;
-        double pctBottom  = bottom      / (double)enemyCount;
-
-        if (Config.DebugEnabled)
-        {
-            Console.Error.WriteLine(
-                $"[DEBUG] EnemyPlan.Analyze:" +
-                $" enemies={enemyCount}," +
-                $" avgX={avgX:F1}/{w-1} ({avgXNorm:P0})," +
-                $" center={center}({pctCenter:P0})," +
-                $" top={top}({pctTop:P0})," +
-                $" bottom={bottom}({pctBottom:P0})"
-            );
-        }
-        const double RUSH_THRESH   = 0.30;
-        const double TURTLE_THRESH = 0.10;
-        // 3) progowanie na podstawie procentów
-        // Rush = >= 60% wrogów w połowie mapy (przed linią)
-        if (progress >= RUSH_THRESH)
-        {
-            if (Config.DebugEnabled)
-                Console.Error.WriteLine("[DEBUG] EnemyPlan: FullRush (forward ≥ 60%)");
-            return EnemyPlan.FullRush;
-        }
-
-        // Centralny push = >= 60% w centrum
-        if (pctCenter >= 0.6)
-        {
-            if (Config.DebugEnabled)
-                Console.Error.WriteLine("[DEBUG] EnemyPlan: CentralPush (center ≥ 60%)");
-            return EnemyPlan.CentralPush;
-        }
-
-        // Podwójny flank = >= 40% góra i >= 40% dół
-        if (pctTop >= 0.4 && pctBottom >= 0.4)
-        {
-            if (Config.DebugEnabled)
-                Console.Error.WriteLine("[DEBUG] EnemyPlan: DoubleFlank (top & bottom ≥ 40%)");
-            return EnemyPlan.DoubleFlank;
-        }
-
-        // Pojedynczy flank = >= 40% po jednej stronie
-        if (pctTop >= 0.4 || pctBottom >= 0.4)
-        {
-            if (Config.DebugEnabled)
-                Console.Error.WriteLine("[DEBUG] EnemyPlan: FlankAttack (one side ≥ 40%)");
-            return EnemyPlan.FlankAttack;
-        }
-
-        // SplitFlankWithSniper = przynajmniej 1 na top, 1 na bottom i 1 w centrum
-        if (top >= 1 && bottom >= 1 && center >= 1)
-        {
-            if (Config.DebugEnabled)
-                Console.Error.WriteLine("[DEBUG] EnemyPlan: SplitFlankWithSniper (1+ top, 1+ bottom, 1+ center)");
-            return EnemyPlan.SplitFlankWithSniper;
-        }
-
-        if (progress <= TURTLE_THRESH)
-        {
-            if (Config.DebugEnabled)
-                Console.Error.WriteLine("[DEBUG] EnemyPlan: SpawnTurtle (spreadX ≤ 2 && forward < 20%)");
-            return EnemyPlan.SpawnTurtle;
-        }
-
-        if (Config.DebugEnabled)
-            Console.Error.WriteLine("[DEBUG] EnemyPlan: Unknown");
-        return EnemyPlan.Unknown;
-    }
-}
-
-public static class AgentTaskAssigner
-{
-    public static void AdaptPlans(GameState st, Dictionary<int, AgentPlan> plans, EnemyPlan plan, int myPlayerId)
-    {
-        int centerX = st.W / 2;
-        int centerY = st.H / 2;
-        int offset = 0;
-        foreach (var (id, p) in plans)
-        {
-            ref readonly var ag = ref st.Agents[id];
-            if (!ag.Alive) continue;
-            var cls = GameState.AgentClasses[id];
-            offset = (offset + 1) % 4;
-            (int tx, int ty) hint = (centerX, centerY + offset - 2);
-            switch (plan)
-            {
-                case EnemyPlan.CentralPush:
-                case EnemyPlan.FlankAttack:
-                case EnemyPlan.DoubleFlank:
-                case EnemyPlan.SplitFlankWithSniper:
-                    if (cls == AgentClass.Sniper)
-                        p.Task = new AgentTask(AgentTaskType.HoldLine, (centerX, centerY));
-                    else
-                        p.Task = new AgentTask(AgentTaskType.HoldLine, hint);
-                    break;
-                case EnemyPlan.SpawnTurtle:
-                    p.Task = new AgentTask(AgentTaskType.PushToCover, hint);
-                    break;
-                case EnemyPlan.FullRush:
-                    if (cls == AgentClass.Bomber)
-                        p.Task = new AgentTask(AgentTaskType.SupportWithSplash, (centerX, centerY));
-                    else if (cls == AgentClass.Sniper)
-                        p.Task = new AgentTask(AgentTaskType.HoldLine, (centerX, centerY));
-                    else
-                        p.Task = new AgentTask(AgentTaskType.HoldLine, hint);
-                    break;
-                default:
-                    p.Task = new AgentTask(AgentTaskType.PushToCover, hint);
-                    break;
-            }
-        }
-    }
-}
-
-
-// ===== Phases/CombatPhase.cs =====
-
-public sealed class CombatPhase : IGamePhase
-{
-    private int _myId = -1;
-    private AI _opponentAI = new CoverBot();
-    private HashSet<(int x, int y)>[] _coveredTiles;
-    private EnemyPlan _currentPlan = EnemyPlan.Unknown;
-    private readonly Dictionary<int, AgentPlan> _plans;
-
-    public CombatPhase(HashSet<(int x, int y)>[] coveredTiles, EnemyPlan currentPlan, IReadOnlyDictionary<int, AgentPlan> prev)
-    {
-        _coveredTiles = coveredTiles;
-        _currentPlan = currentPlan;
-        _plans = new Dictionary<int, AgentPlan>(prev);
-    }
-
-    public void Enter(GameState st, int myPlayerId)
-    {
-        _myId = myPlayerId;
-        _opponentAI.Initialize(1 - myPlayerId);
-    }
-
-    public TurnCommand GetMove(GameState st)
-    {
-        Span<AgentOrder> buf = stackalloc AgentOrder[512];
-        var cmd          = new TurnCommand(GameState.MaxAgents);
-        var reserved     = new HashSet<(byte x, byte y)>();
-
-        /* ── 1. STANCE GLOBALNY ─────────────────────────────────────────── */
-        int myAlive=0, enemyAlive=0, myWet=0, enemyWet=0;
-        for (int i=0;i<GameState.MaxAgents;i++)
-            if (st.Agents[i].Alive)
-                if (st.Agents[i].playerId==_myId){myAlive++; myWet+=st.Agents[i].Wetness;}
-                else                               {enemyAlive++; enemyWet+=st.Agents[i].Wetness;}
-        bool aggressive = myAlive>enemyAlive || myWet<enemyWet;
-
-        /* ── 2. CEL PRIORYTETOWY ────────────────────────────────────────── */
-        int focusEnemy=-1; double bestMargin=double.NegativeInfinity;
-        for (int eid=0;eid<GameState.MaxAgents;eid++)
-        {
-            ref readonly var e = ref st.Agents[eid];
-            if (!e.Alive || e.playerId==_myId) continue;
-
-            int myShooters=0, enemyShooters=0;
-            for (int aid=0;aid<GameState.MaxAgents;aid++)
-            {
-                ref readonly var a = ref st.Agents[aid];
-                if (!a.Alive) continue;
-                int r = AgentUtils.Stats[GameState.AgentClasses[aid]].OptimalRange*2;
-                if (GameState.Mdist(a.X,a.Y,e.X,e.Y) > r) continue;
-                if (a.playerId==_myId) myShooters++; else enemyShooters++;
-            }
-            double margin = myShooters - enemyShooters - e.Wetness*0.01; // łatwy do dobicia
-            if (margin>bestMargin) {bestMargin=margin; focusEnemy=eid;}
-        }
-
-        /* ── 3. RUCHY (agentId rosnąco → priorytet przy konflikcie) ─────── */
-        for (int id=0;id<GameState.MaxAgents;id++)
-        {
-            ref var me = ref st.Agents[id];
-            if (!me.Alive || me.playerId!=_myId) continue;
-
-            int legal = st.GetLegalOrders(id, buf);
-            if (legal==0) continue;
-
-            Span<double> scores = stackalloc double[legal];
-            EvaluateOrders(st, id, ref me, buf[..legal], aggressive, focusEnemy, scores);
-
-            int chosenIdx=-1;
-            while (true)
-            {
-                double bestScore = double.NegativeInfinity;
-                int    bestIdx   = -1;
-                for (int i=0;i<legal;i++)
-                    if (scores[i] > bestScore) { bestScore=scores[i]; bestIdx=i; }
-
-                if (bestIdx==-1) break;                 // nic nie zostało
-                var ord = buf[bestIdx];
-                byte tx = ord.Move.X, ty = ord.Move.Y;
-
-                if (reserved.Contains((tx,ty)) && (tx!=me.X || ty!=me.Y))
-                {   scores[bestIdx]=double.NegativeInfinity;  continue; } // kolizja
-
-                /* ruch przyjęty */
-                reserved.Add((tx,ty));
-                cmd.SetMove(id,  ord.Move);
-                cmd.SetCombat(id,ord.Combat);
-                chosenIdx=bestIdx;
-                break;
-            }
-
-            /* fallback – zostajemy w miejscu */
-            if (chosenIdx==-1)
-            {
-                cmd.SetMove(id, new MoveAction(MoveType.Step, me.X, me.Y));
-                cmd.SetCombat(id,new CombatAction(CombatType.Hunker));
-            }
-        }
-        return cmd;
-    }
-
-    public bool ShouldExit(GameState _) => false;
-    public IGamePhase? GetNextPhase(GameState _) => null;
-
-    /*======================================================================*/
-    /*                      ---  Heurystyki zamknięte  ---                  */
-    /*======================================================================*/
-    private void EvaluateOrders(GameState st, int id, ref AgentState me,
-                                ReadOnlySpan<AgentOrder> orders,
-                                bool aggressive, int focusEnemy,
-                                Span<double> scores)
-    {
-        var cls   = GameState.AgentClasses[id];
-        var stats = AgentUtils.Stats[cls];
-
-        bool isBomber   = cls==AgentClass.Bomber;
-        bool isSniper   = cls==AgentClass.Sniper;
-        bool isMelee    = cls==AgentClass.Berserker;
-
-        for (int idx=0; idx<orders.Length; idx++)
-        {
-            ref readonly var ord = ref orders[idx];
-            byte nx=ord.Move.X, ny=ord.Move.Y;
-            double sc=0;
-
-            /* stance */
-            if (aggressive && focusEnemy!=-1)
-            {
-                ref readonly var trg = ref st.Agents[focusEnemy];
-                sc += (GameState.Mdist(me.X,me.Y,trg.X,trg.Y) -
-                    GameState.Mdist(nx,ny,trg.X,trg.Y))*3;
-            }
-            else if (!aggressive)
-            {
-                int cv = _coveredTiles[GameState.ToIndex(nx,ny)].Count(pos =>
-                    st.Agents.Any(e=>e.Alive && e.playerId!=_myId &&
-                                    e.X==pos.x && e.Y==pos.y));
-                sc += cv*6;
-            }
-
-            /* klasy */
-            if (isBomber)
-            {
-                if (me.SplashBombs>0 && AnyEnemyInRange(st,nx,ny,4)) sc+=15;
-                sc -= DistanceToClosestEnemy(st,_myId,nx,ny)*0.8;
-            }
-            else if (isSniper)
-            {
-                if (focusEnemy!=-1)
-                {
-                    int d=GameState.Mdist(nx,ny,st.Agents[focusEnemy].X,st.Agents[focusEnemy].Y);
-                    sc -= Math.Abs(d - stats.OptimalRange)*2;
-                }
-                int near=DistanceToClosestEnemy(st,_myId,nx,ny);
-                if (near<3) sc-=8;
-            }
-            else if (isMelee)
-            {
-                sc -= DistanceToClosestEnemy(st,_myId,nx,ny)*1.2;
-            }
-            else
-            {
-                int d=DistanceToClosestEnemy(st,_myId,nx,ny);
-                sc -= Math.Abs(d - stats.OptimalRange)*1.0;
-            }
-
-            /* akcja */
-            switch (ord.Combat.Type)
-            {
-                case CombatType.Shoot:
-                {
-                    ref readonly var t = ref st.Agents[ord.Combat.Arg1];
-                    if (!t.Alive) break;
-                    int d = GameState.Mdist(nx,ny,t.X,t.Y);
-                    double dmg = stats.SoakingPower * (d<=stats.OptimalRange?1:0.5);
-                    sc += dmg*(isSniper?2.5:2.0);
-                    if (t.Wetness+dmg>=100) sc+=12;
-                    if (ord.Combat.Arg1==focusEnemy) sc+=6;
-                }
-                break;
-
-                case CombatType.Throw:
-                {
-                    int cx=ord.Combat.Arg1, cy=ord.Combat.Arg2;
-                    int hitE=0, hitF=0;
-                    for (int dy=-1;dy<=1;dy++)
-                    for (int dx=-1;dx<=1;dx++)
-                    {
-                        int xx=cx+dx, yy=cy+dy;
-                        if ((uint)xx>=st.W||(uint)yy>=st.H) continue;
-                        int aid=st.AgentAt((byte)xx,(byte)yy);
-                        if (aid==-1) continue;
-                        if (st.Agents[aid].playerId==_myId) hitF++; else hitE++;
-                    }
-                    sc += hitE*(isBomber?14:10) - hitF*30;
-                }
-                break;
-
-                case CombatType.Hunker:
-                    if (AnyEnemyCanShoot(st,nx,ny)) sc+=4; else sc-=6;
-                break;
-            }
-
-            if (nx==me.X && ny==me.Y && ord.Combat.Type==CombatType.None) sc-=3;
-
-            scores[idx]=sc;
-        }
-    }
-
-    private static int DistanceToClosestEnemy(GameState st, int myPlayerId, int x, int y)
-    {
-        int best=int.MaxValue;
-        for (int i=0;i<GameState.MaxAgents;i++)
-        {
-            ref readonly var e = ref st.Agents[i];
-            if (!e.Alive || e.playerId==myPlayerId) continue;
-            int d = GameState.Mdist(x,y,e.X,e.Y);
-            if (d<best) best=d;
-        }
-        return best;
-    }
-
-    private bool AnyEnemyInRange(GameState st,int x,int y,int range)
-    {
-        for (int i=0;i<GameState.MaxAgents;i++)
-        {
-            ref readonly var e = ref st.Agents[i];
-            if (!e.Alive || e.playerId==_myId) continue;
-            if (GameState.Mdist(x,y,e.X,e.Y)<=range) return true;
-        }
-        return false;
-    }
-
-    private bool AnyEnemyCanShoot(GameState st,int x,int y)
-    {
-        for (int i=0;i<GameState.MaxAgents;i++)
-        {
-            ref readonly var e = ref st.Agents[i];
-            if (!e.Alive || e.playerId==_myId || e.Cooldown>0) continue;
-            int r = AgentUtils.Stats[GameState.AgentClasses[i]].OptimalRange*2;
-            if (GameState.Mdist(x,y,e.X,e.Y)<=r) return true;
-        }
-        return false;
-    }
-}
-
-// ===== Bots/AI.cs =====
-
-public abstract class AI
-{
-    public int PlayerId { get; protected set; }
-
-    public virtual void Initialize(int playerId) => PlayerId = playerId;
-
-    public abstract TurnCommand GetMove(GameState state);
-}
-
-// ===== Bots/CoverBot.cs =====
-
-public class CoverBot : AI
-{
-    /*──── instancja ────*/
-    private double[,] _coverScore = null!;
-    private int _w,_h,_midX;
-    private readonly Random _rng = new();
-    private readonly int[] _stay = new int[GameState.MaxAgents];
-    private readonly int[] _lastX = new int[GameState.MaxAgents];
-    private readonly int[] _lastY = new int[GameState.MaxAgents];
-    private readonly AgentClass[] _myClass = new AgentClass[GameState.MaxAgents];
-    private readonly int[] _sniperTargetCol = new int[GameState.MaxAgents];
-    private bool _initDone;
-
-    public override TurnCommand GetMove(GameState state)
-    {
-        if (!_initDone)
-        {
-            RecogniseClasses(state);
-            PrecomputeCover(state);
-            PrecomputeSniperTargets(state);
-            _initDone = true;
-        }
-
-        Span<AgentOrder> buffer = stackalloc AgentOrder[512];
-        var cmd = new TurnCommand(GameState.MaxAgents);
-        bool enemyVisibleGlobal = AnyEnemyVisible(state);
-
-        for (int id = 0; id < GameState.MaxAgents; ++id)
-        {
-            ref readonly var me = ref state.Agents[id];
-            if (!me.Alive || me.playerId != PlayerId) continue;
-
-            int legal = state.GetLegalOrders(id, buffer);
-            if (legal == 0) continue;
-
-            var cls = _myClass[id];
-            var myStats = AgentUtils.Stats[cls];
-
-            AgentOrder best = buffer[0];
-            double bestScore = double.NegativeInfinity;
-
-            for (int i = 0; i < legal; i++)
-            {
-                ref readonly var ord = ref buffer[i];
-                int tx = ord.Move.X, ty = ord.Move.Y;
-                double sc = 0;
-
-                /*──── 1. Positional Heuristics ────*/
-                // forward baseline
-                int advance = PlayerId == 0 ? tx : (_w-1-tx);
-                double fwBase = state.Turn < 6 ? 4 : 1;
-                sc += advance * fwBase;
-
-                // sniper preferred column
-                if (cls == AgentClass.Sniper)
-                    sc -= Math.Abs(tx - _sniperTargetCol[id]) * 3;
-
-                // cover preference
-                double coverW = cls == AgentClass.Sniper ? 2.0 : cls == AgentClass.Berserker ? 0.5 : 1.0;
-                sc += _coverScore[tx,ty] * coverW;
-
-                // spread penalty
-                for (int j=0;j<GameState.MaxAgents;++j)
-                {
-                    if (j==id) continue;
-                    ref readonly var ally = ref state.Agents[j];
-                    if (!ally.Alive || ally.playerId!=PlayerId) continue;
-                    int d = Mdist(tx,ty,ally.X,ally.Y);
-                    if (d==0) sc-=1000; else if (d<3) sc-=2.5/d; else sc-=0.8/d;
-                }
-
-                // SEEK WEAK ENEMY for aggressive classes
-                if (cls!=AgentClass.Sniper)
-                {
-                    var (bestDist,scoreBonus)=EvaluateSeekTarget(state,tx,ty,myStats,cls);
-                    sc += scoreBonus;
-                }
-
-                /*──── 2. Combat ────*/
-                bool seesEnemy=false;
-                switch(ord.Combat.Type)
-                {
-                    case CombatType.Shoot:
-                    {
-                        int tid = ord.Combat.Arg1; ref readonly var en = ref state.Agents[tid];
-                        if(!en.Alive) break;
-                        seesEnemy=true;
-                        int dist = Mdist(tx,ty,en.X,en.Y);
-                        double dmg = myStats.SoakingPower*(dist<=myStats.OptimalRange?1:0.5);
-                        if(IsBehindCover(state,tx,ty,en)) dmg*=0.5;
-                        if(en.Hunkering) dmg*=0.75;
-                        double scale = cls==AgentClass.Sniper?1.4:1.1;
-                        sc += dmg*scale + (en.Wetness+dmg>=100?40:0);
-                        if(cls==AgentClass.Berserker && dist<=2) sc+=15;
-                    }break;
-                    case CombatType.Throw:
-                    {
-                        int cx=ord.Combat.Arg1, cy=ord.Combat.Arg2;
-                        int em=0, fr=0;
-                        for(int k=0;k<GameState.MaxAgents;++k)
-                        {
-                            ref readonly var a = ref state.Agents[k];
-                            if(!a.Alive) continue;
-                            if(Math.Abs(a.X-cx)>1||Math.Abs(a.Y-cy)>1) continue;
-                            if(a.playerId==PlayerId) fr++; else em++;
-                        }
-                        bool ok=false; double baseVal=0;
-                        if(cls==AgentClass.Bomber)
-                        {
-                            if(fr==0 && em>0){ ok=true; baseVal=30*em; }
-                        }
-                        else
-                        {
-                            if(fr==0 && em>0){ ok=true; baseVal=25*em; }
-                        }
-                        if(ok){ sc+=baseVal; seesEnemy=true; } else sc-=9000;
-                    }break;
-                    case CombatType.Hunker:
-                    {
-                        bool danger = EnemyCanShoot(state,tx,ty);
-                        sc += danger? (cls==AgentClass.Sniper?4:2):-15;
-                    }break;
-                }
-
-                // boredom / stagnation
-                if(!seesEnemy && !enemyVisibleGlobal) sc-=3;
-                if(tx==_lastX[id] && ty==_lastY[id]) sc-=4*(_stay[id]+1);
-
-                sc+=_rng.NextDouble()*1e-4;
-                if(sc>bestScore){ bestScore=sc; best=ord; }
-            }
-
-            cmd.SetMove(id,best.Move);
-            cmd.SetCombat(id,best.Combat);
-
-            if(best.Move.X==_lastX[id] && best.Move.Y==_lastY[id]) _stay[id]++; else _stay[id]=0;
-            _lastX[id]=best.Move.X; _lastY[id]=best.Move.Y;
-        }
-        return cmd;
-    }
-
-    /*──── helper: pick weak enemy heuristic ────*/
-    private (int dist,double bonus) EvaluateSeekTarget(GameState st,int x,int y,AgentStats myStat,AgentClass cls)
-    {
-        int bestDist=999; double bonus=0;
-        for(int i=0;i<GameState.MaxAgents;++i)
-        {
-            ref readonly var en = ref st.Agents[i]; if(!en.Alive || en.playerId==PlayerId) continue;
-            int dist=Mdist(x,y,en.X,en.Y);
-            bool weak = en.Wetness>60 || AgentUtils.Stats[GameState.AgentClasses[i]].ShootCooldown>myStat.ShootCooldown || AgentUtils.Stats[GameState.AgentClasses[i]].SoakingPower<myStat.SoakingPower;
-            double w = weak?0.8:0.4; // weight per tile
-            double val = -dist*w;
-            if(val>bonus){ bonus=val; bestDist=dist; }
-        }
-        return (bestDist,bonus);
-    }
-
-    /*──── initial calculations ────*/
-    private void RecogniseClasses(GameState st)
-    {
-        for(int id=0; id<GameState.MaxAgents; ++id)
-        {
-            ref readonly var ag = ref st.Agents[id]; if(!ag.Alive) continue;
-            var s = AgentUtils.Stats[GameState.AgentClasses[id]]; int bombs=ag.SplashBombs;
-            _myClass[id]=AgentUtils.GuessClass(s.ShootCooldown, s.OptimalRange, s.SoakingPower, bombs);
-            //Console.Error.WriteLine($"Agent {id} -> {_myClass[id]}");
-        }
-    }
-
-    private void PrecomputeCover(GameState st)
-    {
-        _w=st.W; _h=st.H; _midX=(_w-1)/2;
-        _coverScore=new double[_w,_h];
-        for(int y=0;y<_h;y++)
-            for(int x=0;x<_w;x++)
-            {
-                if(GameState.Tiles[GameState.ToIndex((byte)x,(byte)y)]!=TileType.Empty){ _coverScore[x,y]=-9999; continue; }
-                double s=0; foreach(var (dx,dy) in dirs4){ int nx=x+dx, ny=y+dy; if(!st.InBounds((byte)nx,(byte)ny)) continue; var t=GameState.Tiles[GameState.ToIndex((byte)nx,(byte)ny)]; if(t==TileType.HighCover) s+=4; else if(t==TileType.LowCover) s+=2; }
-                _coverScore[x,y]=s;
-            }
-    }
-    private void PrecomputeSniperTargets(GameState st)
-    {
-        for(int id=0; id<GameState.MaxAgents; ++id)
-        {
-            if(_myClass[id]!=AgentClass.Sniper) continue;
-            int bestCol=_midX; double bestVal=-1e9;
-            for(int x=0;x<_w;x++)
-            {
-                double val=_coverScore[x,st.Agents[id].Y]; // need cover orth to cell
-                if(val<2) continue; // need at least low cover adj
-                // count open cells in range
-                int cnt=0;
-                for(int cy=0;cy<_h;cy++)
-                    if(Mdist(x,cy,x,st.Agents[id].Y)<=AgentUtils.Stats[AgentClass.Sniper].OptimalRange) cnt++;
-                if(cnt+val>bestVal){ bestVal=cnt+val; bestCol=x; }
-            }
-            _sniperTargetCol[id]=bestCol;
-        }
-    }
-
-    /*──── utilities ────*/
-    private bool AnyEnemyVisible(GameState st)
-    {
-        for(int i=0;i<GameState.MaxAgents;++i)
-        {
-            ref readonly var ag = ref st.Agents[i]; if(!ag.Alive||ag.playerId!=PlayerId) continue;
-            var stt=AgentUtils.Stats[GameState.AgentClasses[i]];
-            for(int j=0;j<GameState.MaxAgents;++j)
-            {
-                ref readonly var en = ref st.Agents[j]; if(!en.Alive||en.playerId==PlayerId) continue;
-                if(Mdist(ag.X,ag.Y,en.X,en.Y)<=stt.OptimalRange*2) return true;
-            }
-        }
-        return false;
-    }
-    private bool EnemyCanShoot(GameState st,int x,int y)
-    {
-        for(int i=0;i<GameState.MaxAgents;++i)
-        {
-            ref readonly var en = ref st.Agents[i]; if(!en.Alive||en.playerId==PlayerId||en.Cooldown>0) continue;
-            if(Mdist(x,y,en.X,en.Y)<=AgentUtils.Stats[GameState.AgentClasses[i]].OptimalRange*2) return true;
-        }
-        return false;
-    }
-    private bool IsBehindCover(GameState st,int sx,int sy,in AgentState t)
-    {
-        int dx=t.X-sx, dy=t.Y-sy;
-        if(Math.Abs(dx)>1){ int cx=t.X-Math.Sign(dx), cy=t.Y; if(st.InBounds((byte)cx,(byte)cy) && GameState.Tiles[GameState.ToIndex((byte)cx,(byte)cy)]!=TileType.Empty) return true; }
-        if(Math.Abs(dy)>1){ int cx=t.X, cy=t.Y-Math.Sign(dy); if(st.InBounds((byte)cx,(byte)cy) && GameState.Tiles[GameState.ToIndex((byte)cx,(byte)cy)]!=TileType.Empty) return true; }
-        return false;
-    }
-    private static int Mdist(int x1,int y1,int x2,int y2)=>Math.Abs(x1-x2)+Math.Abs(y1-y2);
-    private static readonly (int,int)[] dirs4={ (1,0),(-1,0),(0,1),(0,-1) };
-}
-
-// ===== Bots/Mikasa.cs =====
-
-
-public interface IGamePhase
-{
-    void Enter(GameState st, int myPlayerId);
-    TurnCommand GetMove(GameState st);
-    bool ShouldExit(GameState st);
-    IGamePhase? GetNextPhase(GameState st);
-}
-
-public sealed class GamePhaseController
-{
-    private readonly int _myId;
-    private IGamePhase _current = new OpeningPhase();
-    private bool _isFirst = true;
-
-    public GamePhaseController(int myId) => _myId = myId;
-
-    public TurnCommand GetMove(GameState st)
-    {
-        Console.Error.WriteLine($"[GamePhaseController] Current phase: {_current.GetType().Name} in turn {st.Turn}");
-        if (_isFirst)
-        {
-            _current.Enter(st, _myId);
-            _isFirst = false;
-        }
-        else if (_current.ShouldExit(st))
-        {
-            Console.Error.WriteLine($"[GamePhaseController] Exiting phase: {_current.GetType().Name} in turn {st.Turn}. Next phase: {_current.GetNextPhase(st)?.GetType().Name ?? "null"}");
-            var next = _current.GetNextPhase(st);
-            if (next != null)
-            {
-                _current = next;
-                _current.Enter(st, _myId);
-            }
-        }
-        return _current.GetMove(st);
-    }
-}
-
-public sealed class Mikasa : AI
-{
-    private GamePhaseController? _ctrl;
-
-    public override void Initialize(int playerId)
-    {
-        PlayerId = playerId;
-        _ctrl = new GamePhaseController(playerId);
-    }
-
-    public override TurnCommand GetMove(GameState st)
-    {
-        if (_ctrl == null)
-            throw new InvalidOperationException("Bot not initialized with playerId");
-
-        return _ctrl.GetMove(st);
-    }
-}
 
 // ===== Program.cs =====
 class Player
@@ -2608,7 +1385,7 @@ class Player
     {
 
         BotSetup.Apply();
-        var bot  = new Mikasa();
+        var bot  = new Esdeath();
         int myId = int.Parse(Console.ReadLine()!);
         bot.Initialize(myId);
         while (true)

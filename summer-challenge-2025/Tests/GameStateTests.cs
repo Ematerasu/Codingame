@@ -1,6 +1,8 @@
 using FluentAssertions;
 using Xunit;
 using SummerChallenge2025.Bot;
+using SummerChallenge2025.Engine;
+using System.Diagnostics;
 
 namespace SummerChallenge2025.Tests;
 
@@ -84,19 +86,35 @@ public class MovePhaseTests
         gs.Occup.Test(GameState.ToIndex(0, 0)).Should().Be(false);
     }
 
-    [Fact(DisplayName = "Pusty krok: (0,0) ➜ (5,0) ale stoimy na (1,0)")]
-    public void Move_BigStep_UpdatesPosition()
+    [Theory(DisplayName = "Move: kroki z dowolnego punktu (z pathfindingiem)")]
+    [InlineData(0, 0, 5, 0, 1, 0)]   // prosty ruch w prawo
+    [InlineData(2, 2, 2, 5, 2, 3)]   // ruch w dół
+    [InlineData(4, 4, 1, 4, 3, 4)]   // ruch w lewo
+    [InlineData(1, 1, 3, 3, 2, 1)]   // ruch po ukosie → najpierw w dół
+    [InlineData(5, 5, 5, 5, 5, 5)]   // brak ruchu
+    public void Move_Pathfind_ResolvesFirstStep(
+        byte fromX, byte fromY, byte toX, byte toY, byte expectedX, byte expectedY)
     {
-        var gs = TestFactory.WithAgents((0, 0, 0));
+        var gs = TestFactory.WithAgents((0, fromX, fromY));
+        GameState.InitStatic(
+            Enumerable.Repeat(TileType.Empty, GameState.Cells).ToArray(),
+            Enumerable.Repeat(AgentClass.Gunner, GameState.MaxAgents).ToArray()
+        );
+        PathCache.Precompute(gs);
+        gs.Occup.Set(GameState.ToIndex(fromX, fromY));
+
         var cmd = new TurnCommand(GameState.MaxAgents);
-        cmd.SetMove(0, new MoveAction(MoveType.Step, 5, 0));
+        cmd.SetMove(0, new MoveAction(MoveType.Step, toX, toY));
 
         gs.ApplyInPlace(cmd, new TurnCommand(GameState.MaxAgents));
 
-        gs.Agents[0].X.Should().Be(1);
-        gs.Agents[0].Y.Should().Be(0);
-        gs.Occup.Test(GameState.ToIndex(1, 0)).Should().Be(true);
-        gs.Occup.Test(GameState.ToIndex(0, 0)).Should().Be(false);
+        gs.Agents[0].X.Should().Be((byte)expectedX);
+        gs.Agents[0].Y.Should().Be((byte)expectedY);
+        gs.Occup.Test(GameState.ToIndex(expectedX, expectedY)).Should().BeTrue();
+        if (fromX != expectedX || fromY != expectedY)
+            gs.Occup.Test(GameState.ToIndex(fromX, fromY)).Should().BeFalse();
+        else
+            gs.Occup.Test(GameState.ToIndex(fromX, fromY)).Should().BeTrue();
     }
 
     [Fact(DisplayName = "Cel zajęty przez cover ➜ stoi w miejscu")]
@@ -718,5 +736,81 @@ public class GameStateScoreTests
         gs.ApplyInPlace(new TurnCommand(GameState.MaxAgents), new TurnCommand(GameState.MaxAgents));
         gs.Score0.Should().BePositive(); // powinien zyskać przewagę
         gs.Score1.Should().Be(0);
+    }
+}
+
+public class GameStateBenchmarkTests
+{
+    private const int NumStates = 1000;
+    private const int MaxTurnsPerState = 5;
+    private const int MaxLegalBuffer = 1024;
+
+    private static GameState GenerateState(Random rng)
+        => GameSetup.GenerateRandomState(rng, myPlayerId: 0);
+
+    [Fact(DisplayName = "Benchmark: GetLegalOrders + ApplyInPlace")]
+    public void Benchmark_GetLegalOrders_And_ApplyInPlace()
+    {
+        var rng = new Random(42);
+        var swLegal = new Stopwatch();
+        var swApply = new Stopwatch();
+        Span<AgentOrder> buffer = stackalloc AgentOrder[MaxLegalBuffer];
+
+        long totalLegalOrders = 0;
+        long totalApplys = 0;
+        long totalTurns = 0;
+
+        for (int i = 0; i < NumStates; ++i)
+        {
+            var state = GenerateState(rng);
+
+            for (int turn = 0; turn < MaxTurnsPerState; ++turn)
+            {
+                if (state.IsGameOver) break;
+
+                var cmd0 = new TurnCommand(GameState.MaxAgents);
+                var cmd1 = new TurnCommand(GameState.MaxAgents);
+
+                swLegal.Start();
+                for (int id = 0; id < GameState.MaxAgents; ++id)
+                {
+                    if (!state.Agents[id].Alive) continue;
+                    int cnt = state.GetLegalOrders(id, buffer);
+                    totalLegalOrders += cnt;
+
+                    if (cnt == 0) continue;
+                    var ord = buffer[rng.Next(cnt)];
+                    if (state.Agents[id].playerId == 0)
+                    {
+                        cmd0.Orders[id] = ord;
+                        cmd0.ActiveMask |= 1UL << id;
+                    }
+                    else
+                    {
+                        cmd1.Orders[id] = ord;
+                        cmd1.ActiveMask |= 1UL << id;
+                    }
+                }
+                swLegal.Stop();
+
+                swApply.Start();
+                state.ApplyInPlace(cmd0, cmd1, updateScore: false);
+                swApply.Stop();
+
+                totalApplys++;
+                totalTurns++;
+            }
+        }
+
+        Console.WriteLine($"Benchmark over {NumStates} initial states × {MaxTurnsPerState} turns:");
+        Console.WriteLine($"Total simulated turns:      {totalTurns}");
+        Console.WriteLine($"Total legal orders queried: {totalLegalOrders}");
+        Console.WriteLine($"Total ApplyInPlace calls:   {totalApplys}");
+        Console.WriteLine($"GetLegalOrders time:        {swLegal.ElapsedMilliseconds} ms");
+        Console.WriteLine($"ApplyInPlace time:          {swApply.ElapsedMilliseconds} ms");
+        Console.WriteLine($"Avg GetLegalOrders: {swLegal.Elapsed.TotalMilliseconds / totalTurns:0.000} ms/turn");
+        Console.WriteLine($"Avg ApplyInPlace:   {swApply.Elapsed.TotalMilliseconds / totalTurns:0.000} ms/turn");
+
+        Profiler.Report();
     }
 }
