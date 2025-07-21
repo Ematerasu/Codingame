@@ -14,18 +14,15 @@ class Player
     {
 
         BotSetup.Apply();
-        var bot  = new Esdeath();
-        bool init = false;   
+        var bot  = new Mikasa();
+        int myId = int.Parse(Console.ReadLine()!);
+        bot.Initialize(myId);
         while (true)
-        {
+        {   
             var state = GameStateReader.ReadFromInput(Console.In);
-            if (!init)
-            {
-                bot.Initialize(state.MyId);
-                init = true;
-            }
+            //Console.Error.WriteLine(state.DebugString());
             TurnCommand cmd = bot.GetMove(state);
-            foreach(var line in cmd.ToLines())
+            foreach(var line in cmd.ToLines(state, bot.PlayerId))
             {
                 Console.WriteLine(line);
             }

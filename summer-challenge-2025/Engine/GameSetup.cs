@@ -58,7 +58,6 @@ public static class GameSetup
         if (spawnCnt == 4 && rng.Next(2) == 0) spawnCnt--;
 
         var allClasses = Enum.GetValues(typeof(AgentClass)).Cast<AgentClass>().ToList();
-        rng.Shuffle(allClasses);
 
         // ── 4. Rozstawienie agentów (symetrycznie) ──────────────────────────
         for (int i = 0; i < spawnCnt; ++i)

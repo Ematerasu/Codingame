@@ -3,6 +3,11 @@ using System.Runtime.CompilerServices;
 
 namespace SummerChallenge2025.Bot;
 
+public static class Config
+{
+    public const bool DebugEnabled = true;
+}
+
 public enum AgentClass
 {
     Gunner,

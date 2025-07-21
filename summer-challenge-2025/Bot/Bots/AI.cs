@@ -2,7 +2,7 @@ namespace SummerChallenge2025.Bot;
 
 public abstract class AI
 {
-    protected int PlayerId { get; private set; }
+    public int PlayerId { get; protected set; }
 
     public virtual void Initialize(int playerId) => PlayerId = playerId;
 

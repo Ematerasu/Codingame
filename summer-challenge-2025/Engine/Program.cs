@@ -12,12 +12,13 @@ class Program
 
         var runner = new Runner(
             () => new CoverBot(),
-            () => new Esdeath(),
+            () => new Mikasa(),
             new SimulationParams
             {
                 Seed = seed,
-                Games = 1,
-                Visualizer = null,
+                Games = 100,
+                //Visualizer = null,
+                //Visualizer = new Visualizer(),
                 //Visualizer = new PngVisualizer(seed.ToString()),
             }
         );

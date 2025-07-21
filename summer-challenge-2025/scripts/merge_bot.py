@@ -10,10 +10,14 @@ FILES_ORDER = [
     "BotSetup.cs",
     "Utils.cs",
     "Move.cs",
-    "GameState.cs",
+    "GameStateBit.cs",
     "GameStateReader.cs",
+    "Phases/OpeningPhase.cs",
+    "Phases/DevelopmentPhase.cs",
+    "Phases/CombatPhase.cs",
     "Bots/AI.cs",
-    "Bots/Esdeath.cs",
+    "Bots/CoverBot.cs",
+    "Bots/Mikasa.cs",
     "Program.cs"
 ]
 

@@ -18,7 +18,7 @@ public static class GameStateReader
 
         for (int i = 0; i < GameState.MaxAgents; ++i)
             gs.Agents[i].Alive = false;
-
+        List<(int id, byte x, byte y, int cooldown, int bombs, int wetness)> agents = new();
         for (int i = 0; i < agentCount; ++i)
         {
             var tok = input.ReadLine()!.Split(' ');
@@ -28,19 +28,9 @@ public static class GameStateReader
             int cooldown = int.Parse(tok[3]);
             int bombs = int.Parse(tok[4]);
             int wetness = int.Parse(tok[5]);
-
-            ref var ag = ref gs.Agents[id];
-            ag.Alive = true;
-            ag.X = x;
-            ag.Y = y;
-            ag.Cooldown = cooldown;
-            ag.SplashBombs = bombs;
-            ag.Wetness = wetness;
-            ag.Hunkering = false;         // reset co turę
-
-            gs.Occup.Set(GameState.ToIndex(x, y));
+            agents.Add((id, x, y, cooldown, bombs, wetness));
         }
-
+        gs.UpdateFromInput(agents);
         _ = input.ReadLine();
         ++turn;
         gs.Turn = turn;
@@ -50,7 +40,6 @@ public static class GameStateReader
     //──────────────────────── init helpers ──────────────────────────────
     private static void ReadInit(TextReader input)
     {
-        int myId            = int.Parse(input.ReadLine()!);
         int agentDataCount  = int.Parse(input.ReadLine()!);
 
         var tmpAgents = new (int id,int player,int cd,int range,int power,int bombs)[agentDataCount];

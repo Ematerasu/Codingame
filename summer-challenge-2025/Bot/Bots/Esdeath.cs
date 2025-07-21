@@ -49,7 +49,7 @@ public sealed class Esdeath : AI
         double wCover = 1.5,
         double wDistFront = -0.5,
         // search hyper‑parameters
-        int depth = 4,
+        int depth = 5,
         int beamWidth = 16,
         int kPerAgent = 5,
         AI? opponent = null
@@ -80,7 +80,6 @@ public sealed class Esdeath : AI
 
         var best = Profiler.Wrap("Esdeath.BeamSearch", () => BeamSearch(st, _depth, _beamWidth, stopwatch, budgetMs, ref totalNodes, layerNodes));
 
-        // debug: węzły
         Console.Error.WriteLine($"[DBG] turn {st.Turn}  explored {totalNodes} nodes  byLayer=[{string.Join(",", layerNodes)}]");
 
         return best;
@@ -131,7 +130,7 @@ public sealed class Esdeath : AI
     private TurnCommand BeamSearch(GameState root, int depth, int beamW, Stopwatch sw, int budgetMs, ref int nodeCnt, int[] layerCnt)
     {
         int curCnt = 1;
-        _beamBuf[0] = new Node(root, new TurnCommand(GameState.MaxAgents), 0);
+        _beamBuf[0] = new Node(root, new TurnCommand(GameState.MaxAgents), double.NegativeInfinity);
         Node best = _beamBuf[0];
         int myId = PlayerId;
         Span<AgentOrder> buf = stackalloc AgentOrder[256];
@@ -141,17 +140,20 @@ public sealed class Esdeath : AI
 
             for (int bi = 0; bi < curCnt; ++bi)
             {
-                ref Node node = ref _beamBuf[bi];
+                Node node = _beamBuf[bi];
                 if (sw.ElapsedMilliseconds >= budgetMs) return best.First;
                 foreach (var myCmd in GenerateJointOrders(node.State))
                 {
-                    var clone = node.State.FastClone();
+                    GameState clone = null!;
+                    Profiler.Measure("Clone", () => clone = node.State.FastClone());
                     var rng = new Random();
-                    var enemyCmd = _opponentBot.GetMove(clone);
+                    TurnCommand enemyCmd = default!;
+                    Profiler.Measure("OpponentMove", () => enemyCmd = _opponentBot.GetMove(clone));
 
-                    clone.ApplyInPlace(myCmd, enemyCmd);
+                    Profiler.Measure("ApplyMove", () => clone.ApplyInPlace(myCmd, enemyCmd));
 
-                    double sc = Evaluate(clone, myId);
+                    double sc = 0;
+                    Profiler.Measure("Evaluate", () => sc = Evaluate(clone, myId));
                     var child = new Node(clone, d == 0 ? myCmd : node.First, sc);
 
                     nodeCnt++;
@@ -163,9 +165,11 @@ public sealed class Esdeath : AI
                         best = child;
 
                     if (sc > best.Score) best = child;
+                    if (sw.ElapsedMilliseconds >= budgetMs) return best.First;
                 }
 
                 if (sw.ElapsedMilliseconds >= budgetMs) return best.First;
+
             }
 
             if (nextCnt == 0) break;
@@ -255,20 +259,23 @@ public sealed class Esdeath : AI
     private int CustomLegalOrders(GameState st, int agentId, Span<AgentOrder> dst)
     {
         Span<AgentOrder> buf = stackalloc AgentOrder[256];
-        int cnt = st.GetLegalOrders(agentId, buf);
-
         Span<AgentOrder> bestOrders = stackalloc AgentOrder[_kPerAgent];
-        Span<double>     bestScore  = stackalloc double[_kPerAgent];
-        int bestCnt = 0;
+        Span<double> bestScore = stackalloc double[_kPerAgent];
+
+        var sw = Stopwatch.StartNew();
+        int cnt = st.GetLegalOrders(agentId, buf);
+        Profiler.Add("LegalOrders", sw.Elapsed.TotalMilliseconds);
 
         AgentClass cls = GameState.AgentClasses[agentId];
+        int bestCnt = 0;
 
         for (int i = 0; i < cnt; ++i)
         {
             ref readonly var ord = ref buf[i];
 
-            // Sniper – ignorujemy kroki oddalające od covera
-            if (cls == AgentClass.Sniper && ord.Move.Type == MoveType.Step && DistanceToNearestCover(ord.Move.X, ord.Move.Y) > 4)
+            if (cls == AgentClass.Sniper &&
+                ord.Move.Type == MoveType.Step &&
+                DistanceToNearestCover(ord.Move.X, ord.Move.Y) > 4)
                 continue;
 
             double sc = LocalHeuristic(st, agentId, ord);
@@ -280,7 +287,6 @@ public sealed class Esdeath : AI
             }
             else
             {
-                // wyszukaj najgorszy
                 int worst = 0;
                 for (int w = 1; w < _kPerAgent; ++w)
                     if (bestScore[w] < bestScore[worst]) worst = w;
@@ -292,9 +298,9 @@ public sealed class Esdeath : AI
             }
         }
 
-        // ✂️ skopiuj do dst
         for (int i = 0; i < bestCnt; ++i)
             dst[i] = bestOrders[i];
+
         return bestCnt;
     }
 

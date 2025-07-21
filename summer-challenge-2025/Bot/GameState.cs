@@ -5,31 +5,6 @@ using System.Text;
 
 namespace SummerChallenge2025.Bot;
 
-public enum TileType : byte
-{
-    Empty = 0,
-    LowCover = 1,
-    HighCover = 2
-}
-
-public struct AgentStats
-{
-    public int ShootCooldown;
-    public int OptimalRange;
-    public int SoakingPower;
-}
-
-public struct AgentState
-{
-    public int playerId;
-    public byte X, Y;
-    public int Cooldown;
-    public int Wetness;
-    public int SplashBombs;
-    public bool Hunkering;
-    public bool Alive;
-}
-
 public readonly struct Position
 {
     public readonly byte X;

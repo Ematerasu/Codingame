@@ -80,16 +80,15 @@ public struct TurnCommand
         }
     }
     
-    public IEnumerable<string> ToLines()
+    public IEnumerable<string> ToLines(GameState st, int myId)
     {
         var sb = new StringBuilder(32);
 
-        for (int id = 0; id < Orders.Length; ++id)
-        {
+        for (int id = 0; id < GameState.MaxAgents; ++id)
+        {   
+            if (!st.Agents[id].Alive) continue;
+            if (st.Agents[id].playerId != myId) continue;
             var ord = Orders[id];
-            if (ord.Move.Type == MoveType.None &&
-                ord.Combat.Type == CombatType.None) continue;
-
             sb.Clear();
             sb.Append(id + 1).Append(';');
 
@@ -107,6 +106,9 @@ public struct TurnCommand
                     sb.Append("THROW ").Append(ord.Combat.Arg1).Append(' ').Append(ord.Combat.Arg2);
                     break;
                 case CombatType.Hunker:
+                    sb.Append("HUNKER_DOWN");
+                    break;
+                case CombatType.None:
                     sb.Append("HUNKER_DOWN");
                     break;
             }

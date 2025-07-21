@@ -47,7 +47,10 @@ public static class Profiler
             stat = new Stat();
             stats[label] = stat;
         }
-
+        if (label == "Esdeath.BeamSearch")
+        {
+            Console.WriteLine($"[Profiler] {label} took {elapsed * 1000.0 / Stopwatch.Frequency} ms");
+        }
         stat.Add(elapsed);
         return result;
     }
@@ -59,6 +62,16 @@ public static class Profiler
         {
             Console.WriteLine($"{label,-25}: {stat.Count,6} calls | avg {stat.AvgMs,6:F6} ms | total {stat.TotalMs,8:F6} ms");
         }
+    }
+
+    public static void Add(string label, double ms)
+    {
+        if (!stats.TryGetValue(label, out var stat))
+        {
+            stat = new Stat();
+            stats[label] = stat;
+        }
+        stat.Add((long)(ms * Stopwatch.Frequency / 1000.0));
     }
 
     public static void Reset()
