@@ -37,4 +37,4 @@ Each challenge directory is self-contained and can be built/run independently.
 
 ---
 
-For more details, check out my [CodinGame profile](https://www.codingame.com/profile).
+For more details, check out my [CodinGame profile]([https://www.codingame.com/profile](https://www.codingame.com/profile/b77d1303f099e31800574f8ac7a8b14a4532974)).
